@@ -1,3 +1,11 @@
+## Project Description
+
+I built this as a lightweight version of what Bid360’s Design Tool could become. The core idea was to focus on the workflow, not just the UI: a designer can place, move, resize, save, reload, and version closet layouts in a clean visual workspace. I used Next.js and TypeScript for the front end, then added a Prisma-backed MongoDB persistence layer so designs can be saved as projects with revision history instead of living only in browser state.
+
+What I wanted to show is how I think about the real product: front-end polish matters because this is a visual selling tool, but I also thought through the full stack behind it, including data modeling for projects, spaces, scans, and design revisions. I added confirmation modals, toast feedback, saved-layout loading, and a clearer product story around mobile capture feeding desktop design. So even though this is a focused demo, it reflects how I’d approach the real role: own the design tool end to end, make the experience intuitive, and build it on a foundation that can grow into a true SaaS product.
+
+## 
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Product Scaffold
