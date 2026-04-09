@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "Interactive closet design tool – Organized Living",
 };
 
-export default function RootLayout({
+export default function RootLayout({ 
   children,
 }: Readonly<{
   children: React.ReactNode;
