@@ -1,5 +1,29 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Product Scaffold
+
+The app now includes a first-pass persistence layer for a real product workflow:
+
+- `prisma/schema.prisma` models projects, spaces, scans, and versioned design revisions
+- `src/app/api/projects/*` provides route handlers for creating projects and saving revisions
+- `src/store/designStore.ts` keeps local draft storage, then upgrades to backend persistence when `DATABASE_URL` is configured
+
+## Database Setup
+
+1. Copy `.env.example` to `.env`
+2. Add your MongoDB connection string as `DATABASE_URL`
+3. Generate the Prisma client:
+
+```bash
+npm run prisma:generate
+```
+
+4. Push the schema to MongoDB:
+
+```bash
+npm run prisma:push
+```
+
 ## Getting Started
 
 First, run the development server:

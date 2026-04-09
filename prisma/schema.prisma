@@ -1,0 +1,118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  lead
+  measured
+  designing
+  proposed
+  sold
+  installed
+  archived
+}
+
+enum RevisionSource {
+  manual
+  imported_scan
+  autosave
+}
+
+model Organization {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  slug      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+  users     User[]
+}
+
+model User {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String?       @db.ObjectId
+  email          String        @unique
+  name           String?
+  role           String        @default("designer")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  projects       Project[]     @relation("ProjectOwner")
+}
+
+model Project {
+  id             String           @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String?          @db.ObjectId
+  ownerId        String?          @db.ObjectId
+  name           String
+  clientName     String?
+  address        String?
+  status         ProjectStatus    @default(lead)
+  notes          String?
+  source         String           @default("web-demo")
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization?    @relation(fields: [organizationId], references: [id])
+  owner          User?            @relation("ProjectOwner", fields: [ownerId], references: [id])
+  spaces         Space[]
+  revisions      DesignRevision[]
+  scanSessions   ScanSession[]
+}
+
+model Space {
+  id           String           @id @default(auto()) @map("_id") @db.ObjectId
+  projectId    String           @db.ObjectId
+  name         String
+  widthInches  Int
+  heightInches Int
+  depthInches  Int?
+  geometry     Json?
+  sourceScanId String?          @db.ObjectId
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  project      Project          @relation(fields: [projectId], references: [id])
+  sourceScan   ScanSession?     @relation(fields: [sourceScanId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  revisions    DesignRevision[]
+}
+
+model ScanSession {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId        String    @db.ObjectId
+  devicePlatform   String
+  captureMethod    String
+  status           String    @default("uploaded")
+  rawAssetUrl      String?
+  previewImageUrl  String?
+  processingResult Json?
+  capturedAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  project          Project   @relation(fields: [projectId], references: [id])
+  spaces           Space[]
+}
+
+model DesignRevision {
+  id               String         @id @default(auto()) @map("_id") @db.ObjectId
+  projectId        String         @db.ObjectId
+  spaceId          String         @db.ObjectId
+  revisionNumber   Int
+  name             String
+  source           RevisionSource @default(manual)
+  dimensionsWidth  Int
+  dimensionsHeight Int
+  totalPrice       Int            @default(0)
+  componentCount   Int            @default(0)
+  snapshot         Json
+  pricingSnapshot  Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  project          Project        @relation(fields: [projectId], references: [id])
+  space            Space          @relation(fields: [spaceId], references: [id])
+
+  @@unique([projectId, revisionNumber])
+}
