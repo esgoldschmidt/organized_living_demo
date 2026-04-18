@@ -7,8 +7,47 @@ import {
   PALETTE_ITEMS,
 } from "@/types";
 
-const LOCAL_STORAGE_DESIGN_KEY = "bid360-design";
-const LOCAL_STORAGE_PROJECT_KEY = "bid360-project-id";
+export type ClosetShape = "straight" | "left" | "right" | "u" | "walk-in";
+export type ShelfPositions = Record<string, [number, number, number]>;
+
+export interface ClosetConfig {
+  width: number;
+  height: number;
+  depth: number;
+  shelfDepth: number;
+  shelfHeight: number;
+  leftReturn: number;
+  rightReturn: number;
+  rightOffset: number;
+  frontStubDepth: number;
+  shape: ClosetShape;
+}
+
+const DEFAULT_CLOSET_CONFIG: ClosetConfig = {
+  width: 120,
+  height: 96,
+  depth: 84,
+  shelfDepth: 14,
+  shelfHeight: 72,
+  leftReturn: 36,
+  rightReturn: 36,
+  rightOffset: 0,
+  frontStubDepth: 36,
+  shape: "walk-in",
+};
+const DEFAULT_ENABLED_PIECE_IDS = [
+  "back-left-tower",
+  "back-right-tower",
+  "center-drawers",
+  "center-shelves",
+  "left-rod",
+  "left-shelves",
+  "right-double-rod",
+  "right-shelves",
+];
+
+const LOCAL_STORAGE_DESIGN_KEY = "closet-design";
+const LOCAL_STORAGE_PROJECT_KEY = "closet-project-id";
 
 const SAMPLE_DIMENSIONS: ClosetDimensions = {
   width: 120,
@@ -129,6 +168,7 @@ interface DesignStore {
   resizeComponent: (id: string, w: number, h: number) => void;
   removeComponent: (id: string) => void;
   selectComponent: (id: string | null) => void;
+  syncCurrentDesign: (snapshot: DesignSnapshot) => void;
   applySnapshot: (
     snapshot: DesignSnapshot,
     options?: { projectId?: string | null; message?: string | null }
@@ -136,13 +176,27 @@ interface DesignStore {
   saveDesign: () => Promise<void>;
   loadDesign: () => Promise<void>;
   clearDesign: () => void;
+
+  closetConfig: ClosetConfig;
+  setClosetConfig: (update: Partial<ClosetConfig>) => void;
+  enabledPieceIds: string[];
+  setEnabledPieceIds: (ids: string[]) => void;
+  shelfPositions: ShelfPositions;
+  setShelfPositions: (positions: ShelfPositions) => void;
 }
 
 function buildSnapshot(
   dimensions: ClosetDimensions,
-  components: ClosetComponent[]
+  components: ClosetComponent[],
+  closetConfig: ClosetConfig,
+  enabledPieceIds: string[],
+  shelfPositions: ShelfPositions
 ): DesignSnapshot {
-  return { dimensions, components };
+  return { dimensions, components, closetConfig, enabledPieceIds, shelfPositions };
+}
+
+function sameStringArray(a: string[], b: string[]) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 async function createRemoteProject(snapshot: DesignSnapshot) {
@@ -195,6 +249,13 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   persistenceState: "idle",
   persistenceMessage: "Default layout loaded for walkthrough.",
 
+  closetConfig: DEFAULT_CLOSET_CONFIG,
+  setClosetConfig: (update) => set((s) => ({ closetConfig: { ...s.closetConfig, ...update } })),
+  enabledPieceIds: DEFAULT_ENABLED_PIECE_IDS,
+  setEnabledPieceIds: (ids) => set({ enabledPieceIds: ids }),
+  shelfPositions: {},
+  setShelfPositions: (positions) => set({ shelfPositions: positions }),
+
   setDimensions: (d) =>
     set((s) => ({ dimensions: { ...s.dimensions, ...d } })),
 
@@ -236,6 +297,22 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
 
   selectComponent: (id) => set({ selectedId: id }),
 
+  syncCurrentDesign: (snapshot) =>
+    set((state) => {
+      const nextEnabledPieceIds = snapshot.enabledPieceIds ?? state.enabledPieceIds;
+
+      return {
+        dimensions: snapshot.dimensions,
+        components: snapshot.components,
+        closetConfig: snapshot.closetConfig ?? state.closetConfig,
+        enabledPieceIds: sameStringArray(state.enabledPieceIds, nextEnabledPieceIds)
+          ? state.enabledPieceIds
+          : nextEnabledPieceIds,
+        shelfPositions: snapshot.shelfPositions ?? state.shelfPositions,
+        selectedId: null,
+      };
+    }),
+
   applySnapshot: (snapshot, options) => {
     if (options?.projectId) {
       localStorage.setItem(LOCAL_STORAGE_PROJECT_KEY, options.projectId);
@@ -246,6 +323,9 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
       projectId: options?.projectId ?? get().projectId,
       dimensions: snapshot.dimensions,
       components: snapshot.components,
+      closetConfig: snapshot.closetConfig ?? get().closetConfig,
+      enabledPieceIds: snapshot.enabledPieceIds ?? get().enabledPieceIds,
+      shelfPositions: snapshot.shelfPositions ?? get().shelfPositions,
       selectedId: null,
       persistenceState: "saved",
       persistenceMessage: options?.message ?? "Loaded saved layout.",
@@ -253,8 +333,8 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   },
 
   saveDesign: async () => {
-    const { dimensions, components, projectId } = get();
-    const snapshot = buildSnapshot(dimensions, components);
+    const { dimensions, components, projectId, closetConfig, enabledPieceIds, shelfPositions } = get();
+    const snapshot = buildSnapshot(dimensions, components, closetConfig, enabledPieceIds, shelfPositions);
 
     set({
       persistenceState: "saving",
@@ -322,6 +402,9 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
       set({
         dimensions: SAMPLE_SNAPSHOT.dimensions,
         components: SAMPLE_SNAPSHOT.components,
+        closetConfig: DEFAULT_CLOSET_CONFIG,
+        enabledPieceIds: DEFAULT_ENABLED_PIECE_IDS,
+        shelfPositions: {},
         selectedId: null,
         persistenceState: "idle",
         persistenceMessage: "Loaded the default walkthrough layout.",
@@ -330,21 +413,19 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
     }
 
     const snapshot = JSON.parse(raw) as DesignSnapshot;
-    set({
-      dimensions: snapshot.dimensions,
-      components: snapshot.components,
-      selectedId: null,
-      persistenceState: "saved",
-      persistenceMessage: "Loaded local draft.",
+    get().applySnapshot(snapshot, {
+      message: "Loaded local draft.",
     });
   },
 
   clearDesign: () =>
     {
-      const emptySnapshot = buildSnapshot(get().dimensions, []);
+      const emptySnapshot = buildSnapshot(get().dimensions, [], get().closetConfig, [], {});
       localStorage.setItem(LOCAL_STORAGE_DESIGN_KEY, JSON.stringify(emptySnapshot));
       set({
         components: [],
+        enabledPieceIds: [],
+        shelfPositions: {},
         selectedId: null,
         persistenceState: "idle",
         persistenceMessage: "Canvas cleared.",

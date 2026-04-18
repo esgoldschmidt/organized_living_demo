@@ -25,6 +25,21 @@ export interface ClosetDimensions {
   height: number; // inches
 }
 
+export type SnapshotClosetShape = "straight" | "left" | "right" | "u" | "walk-in";
+
+export interface SnapshotClosetConfig {
+  width: number;
+  height: number;
+  depth: number;
+  shelfDepth: number;
+  shelfHeight: number;
+  leftReturn: number;
+  rightReturn: number;
+  rightOffset: number;
+  frontStubDepth: number;
+  shape: SnapshotClosetShape;
+}
+
 export interface PaletteItem {
   type: ComponentType;
   label: string;
@@ -39,6 +54,9 @@ export interface PaletteItem {
 export interface DesignSnapshot {
   dimensions: ClosetDimensions;
   components: ClosetComponent[];
+  closetConfig?: SnapshotClosetConfig;
+  enabledPieceIds?: string[];
+  shelfPositions?: Record<string, [number, number, number]>;
 }
 
 export const ComponentTypeSchema = z.enum([
@@ -67,9 +85,25 @@ export const ClosetDimensionsSchema = z.object({
   height: z.number(),
 });
 
+export const SnapshotClosetConfigSchema = z.object({
+  width: z.number(),
+  height: z.number(),
+  depth: z.number(),
+  shelfDepth: z.number(),
+  shelfHeight: z.number(),
+  leftReturn: z.number(),
+  rightReturn: z.number(),
+  rightOffset: z.number(),
+  frontStubDepth: z.number(),
+  shape: z.enum(["straight", "left", "right", "u", "walk-in"]),
+});
+
 export const DesignSnapshotSchema = z.object({
   dimensions: ClosetDimensionsSchema,
   components: z.array(ClosetComponentSchema),
+  closetConfig: SnapshotClosetConfigSchema.optional(),
+  enabledPieceIds: z.array(z.string()).optional(),
+  shelfPositions: z.record(z.string(), z.tuple([z.number(), z.number(), z.number()])).optional(),
 });
 
 export const PALETTE_ITEMS: PaletteItem[] = [

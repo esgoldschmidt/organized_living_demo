@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Bid360 Design Tool",
+  title: "Closet Design Tool",
   description: "Interactive closet design tool – Organized Living",
 };
 

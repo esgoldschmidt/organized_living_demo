@@ -36,6 +36,9 @@ export default function Toolbar() {
     applySnapshot,
     components,
     dimensions,
+    closetConfig,
+    enabledPieceIds,
+    shelfPositions,
     projectId,
     persistenceState,
     persistenceMessage,
@@ -78,7 +81,7 @@ export default function Toolbar() {
   }, [persistenceMessage, persistenceState]);
 
   const exportJSON = () => {
-    const data = JSON.stringify({ dimensions, components }, null, 2);
+    const data = JSON.stringify({ dimensions, components, closetConfig, enabledPieceIds, shelfPositions }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -139,8 +142,8 @@ export default function Toolbar() {
             </svg>
           </div>
           <div>
-            <h1 className="leading-none text-sm font-bold text-stone-900">Bid360</h1>
-            <p className="mt-0.5 text-xs leading-none text-stone-500">Design Tool</p>
+            <h1 className="leading-none text-sm font-bold text-stone-900">Design Tool</h1>
+            <p className="mt-0.5 text-xs leading-none text-stone-500">Closet Planner</p>
           </div>
           <div className="ml-4 h-5 w-px bg-stone-200" />
           <span className="text-xs text-stone-500">
