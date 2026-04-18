@@ -8,7 +8,7 @@ import * as THREE from "three";
 import Link from "next/link";
 import { useDesignStore } from "@/store/designStore";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
-import type { ClosetComponent } from "@/types";
+import type { ClosetComponent, MeasuredFootprint } from "@/types";
 
 const SHELF_THICKNESS = 2.5;
 const WALL_THICKNESS = 8;
@@ -650,11 +650,13 @@ function ClosetRoom({
   cameraView,
   wallVisibility,
   config,
+  footprint,
 }: {
   mode: ViewMode;
   cameraView: CameraView;
   wallVisibility: WallVisibility;
   config: DesignConfig;
+  footprint: MeasuredFootprint;
 }) {
   const forceOpen = mode === "open" || wallVisibility === "open";
   const smartCutaway = wallVisibility === "smart" && (cameraView === "front" || cameraView === "detail" || mode === "inspection");
@@ -666,76 +668,71 @@ function ClosetRoom({
   const doorwayContextOpacity = forceOpen ? 0 : wallVisibility === "smart" ? 0.34 : 0.78;
   const ceilingOpacity = cameraView === "top" || smartCutaway ? 0 : forceOpen ? 0.03 : mode === "inspection" ? 0.28 : 0.88;
   const flangeW = 56;
-  const doorOpeningWidth = Math.min(48, Math.max(34, config.width * 0.42));
-  const frontWallRun = (config.width - doorOpeningWidth) / 2;
-  const frontWallZ = config.depth / 2 + WALL_THICKNESS / 2;
+  const pointById = useMemo(() => new Map(footprint.points.map((point) => [point.id, point])), [footprint.points]);
+  const footprintPoints = useMemo(() => footprint.points.map((point) => ({
+    id: point.id,
+    type: point.type,
+    x: point.x - config.width / 2,
+    z: point.y - config.depth / 2,
+  })), [config.depth, config.width, footprint.points]);
+  const floorShape = useMemo(() => {
+    const shape = new THREE.Shape();
+    footprintPoints.forEach((point, index) => {
+      if (index === 0) shape.moveTo(point.x, point.z);
+      else shape.lineTo(point.x, point.z);
+    });
+    shape.closePath();
+    return shape;
+  }, [footprintPoints]);
+  const leftJamb = pointById.get(footprint.opening.leftJambId);
+  const rightJamb = pointById.get(footprint.opening.rightJambId);
+  const doorOpeningWidth = Math.max(24, footprint.opening.width);
+  const frontWallZ = ((leftJamb?.y ?? config.depth) + (rightJamb?.y ?? config.depth)) / 2 - config.depth / 2 + WALL_THICKNESS / 2;
   const roomWallExtension = 64;
-  const leftFrontWallX = -config.width / 2 + frontWallRun / 2;
-  const rightFrontWallX = config.width / 2 - frontWallRun / 2;
-  const leftDoorJambX = -doorOpeningWidth / 2 - WALL_THICKNESS / 2;
-  const rightDoorJambX = doorOpeningWidth / 2 + WALL_THICKNESS / 2;
+  const leftDoorJambX = (leftJamb?.x ?? config.frontStubDepth) - config.width / 2 - WALL_THICKNESS / 2;
+  const rightDoorJambX = (rightJamb?.x ?? config.width - config.frontStubDepth) - config.width / 2 + WALL_THICKNESS / 2;
   const leftRoomWallX = -doorOpeningWidth / 2 - WALL_THICKNESS - roomWallExtension / 2;
   const rightRoomWallX = doorOpeningWidth / 2 + WALL_THICKNESS + roomWallExtension / 2;
-  const leftCornerX = -config.width / 2 - WALL_THICKNESS / 2;
-  const rightCornerX = config.width / 2 + WALL_THICKNESS / 2;
+  const measuredWalls = footprint.walls
+    .map((wall) => {
+      const start = pointById.get(wall.from);
+      const end = pointById.get(wall.to);
+      if (!start || !end) return null;
+
+      const sx = start.x - config.width / 2;
+      const sz = start.y - config.depth / 2;
+      const ex = end.x - config.width / 2;
+      const ez = end.y - config.depth / 2;
+      const dx = ex - sx;
+      const dz = ez - sz;
+      const length = Math.hypot(dx, dz);
+      const isFront = start.y > config.depth - 2 && end.y > config.depth - 2;
+      const isBack = start.y < 2 && end.y < 2;
+
+      return {
+        ...wall,
+        midpoint: [(sx + ex) / 2, config.height / 2, (sz + ez) / 2] as [number, number, number],
+        length,
+        rotationY: -Math.atan2(dz, dx),
+        opacity: isFront ? frontOpacity : isBack ? backOpacity : sideOpacity,
+        color: isBack ? "#ede8e2" : isFront ? "#e6e0da" : "#e9e3dd",
+      };
+    })
+    .filter((wall): wall is NonNullable<typeof wall> => Boolean(wall));
 
   const showWalls = !forceOpen;
-  const showFrontWalls = showWalls && frontOpacity > 0;
   const showDoorwayContext = showWalls && doorwayContextOpacity > 0;
 
   return (
     <group>
-      {/* back wall */}
-      {showWalls && (
-        <mesh position={[0, config.height / 2, -config.depth / 2 - WALL_THICKNESS / 2]} receiveShadow>
-          <boxGeometry args={[config.width + WALL_THICKNESS * 2, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-          <meshStandardMaterial color="#ede8e2" opacity={backOpacity} transparent={backOpacity < 1} roughness={0.9} />
-        </mesh>
-      )}
-
-      {/* niche side walls — span only the closet depth */}
-      {showWalls && (
-        <>
-          <mesh position={[-config.width / 2 - WALL_THICKNESS / 2, config.height / 2, 0]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, config.depth]} />
-            <meshStandardMaterial color="#e9e3dd" opacity={sideOpacity} transparent={sideOpacity < 1} roughness={0.9} />
+      {showWalls && measuredWalls.map((wall) => (
+        wall.opacity <= 0 ? null : (
+          <mesh key={`${wall.from}-${wall.to}`} position={wall.midpoint} rotation={[0, wall.rotationY, 0]} receiveShadow>
+            <boxGeometry args={[wall.length + WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
+            <meshStandardMaterial color={wall.color} opacity={wall.opacity} transparent={wall.opacity < 1} roughness={0.9} />
           </mesh>
-          <mesh position={[config.width / 2 + WALL_THICKNESS / 2, config.height / 2, 0]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, config.depth]} />
-            <meshStandardMaterial color="#e9e3dd" opacity={sideOpacity} transparent={sideOpacity < 1} roughness={0.9} />
-          </mesh>
-        </>
-      )}
-
-      {/* room wall flanking panels — inner edge flush with niche interior (L-joint) */}
-      {showFrontWalls && (
-        <>
-          <mesh position={[leftFrontWallX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[frontWallRun, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e9e3dd" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-          <mesh position={[rightFrontWallX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[frontWallRun, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e9e3dd" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-          <mesh position={[leftDoorJambX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e6e0da" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-          <mesh position={[rightDoorJambX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e6e0da" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-          <mesh position={[leftCornerX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e4ded8" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-          <mesh position={[rightCornerX, config.height / 2, frontWallZ]} receiveShadow>
-            <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e4ded8" opacity={frontOpacity} transparent={frontOpacity < 1} roughness={0.9} />
-          </mesh>
-        </>
-      )}
+        )
+      ))}
 
       {/* doorway wall extensions — light room context without closing off the product view */}
       {showDoorwayContext && (
@@ -767,15 +764,19 @@ function ClosetRoom({
         </>
       )}
 
-      {/* floor — extends into the room in front of opening */}
-      <mesh position={[0, -0.25, config.depth / 4 + 8]} receiveShadow>
-        <boxGeometry args={[config.width + (WALL_THICKNESS + flangeW) * 2, 0.5, config.depth + flangeW + WALL_THICKNESS * 2]} />
-        <meshStandardMaterial color="#d4cec4" roughness={0.88} />
+      {/* room floor context plus measured closet footprint */}
+      <mesh position={[0, -0.32, config.depth / 4 + 8]} receiveShadow>
+        <boxGeometry args={[config.width + (WALL_THICKNESS + flangeW) * 2, 0.35, config.depth + flangeW + WALL_THICKNESS * 2]} />
+        <meshStandardMaterial color="#cfc8be" roughness={0.88} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.25, 0]} receiveShadow>
+        <shapeGeometry args={[floorShape]} />
+        <meshStandardMaterial color="#d8d2c8" roughness={0.88} />
       </mesh>
 
       {/* ceiling */}
-      <mesh position={[0, config.height + WALL_THICKNESS / 2, config.depth / 4 + 8]}>
-        <boxGeometry args={[config.width + (WALL_THICKNESS + flangeW) * 2, WALL_THICKNESS, config.depth + flangeW]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, config.height + WALL_THICKNESS / 2, 0]}>
+        <shapeGeometry args={[floorShape]} />
         <meshStandardMaterial color="#f5f1ec" opacity={ceilingOpacity} transparent={ceilingOpacity < 1} roughness={0.88} />
       </mesh>
     </group>
@@ -1294,6 +1295,7 @@ export default function ClosetExperience3D() {
   const {
     syncCurrentDesign,
     closetConfig: config,
+    closetFootprint,
     enabledPieceIds,
     setEnabledPieceIds,
     shelfPositions,
@@ -1330,10 +1332,11 @@ export default function ClosetExperience3D() {
       },
       components: buildPersistenceComponents(config, modules, enabledPieces),
       closetConfig: config,
+      closetFootprint,
       enabledPieceIds: Array.from(enabledPieces),
       shelfPositions,
     });
-  }, [config, enabledPieces, modules, shelfPositions, syncCurrentDesign]);
+  }, [closetFootprint, config, enabledPieces, modules, shelfPositions, syncCurrentDesign]);
 
   function togglePiece(id: PieceId) {
     const next = new Set(enabledPieces);
@@ -1393,7 +1396,7 @@ export default function ClosetExperience3D() {
             <Lights />
             <FloorShadow cameraView={cameraView} />
             <CameraRig mode={mode} cameraView={cameraView} focusPosition={selectedModule?.position ?? null} config={config} zoom={effectiveZoom} />
-            <ClosetRoom mode={mode} cameraView={cameraView} wallVisibility={wallVisibility} config={config} />
+            <ClosetRoom mode={mode} cameraView={cameraView} wallVisibility={wallVisibility} config={config} footprint={closetFootprint} />
             <ClosetBuiltIn config={config} />
             <ConfigurableModules
               modules={modules}

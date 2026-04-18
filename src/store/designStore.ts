@@ -4,6 +4,7 @@ import {
   ClosetDimensions,
   ComponentType,
   DesignSnapshot,
+  MeasuredFootprint,
   PALETTE_ITEMS,
 } from "@/types";
 
@@ -35,6 +36,75 @@ const DEFAULT_CLOSET_CONFIG: ClosetConfig = {
   frontStubDepth: 36,
   shape: "walk-in",
 };
+
+export function buildFootprintFromConfig(config: ClosetConfig, source: MeasuredFootprint["source"] = "preset"): MeasuredFootprint {
+  const openingWidth = config.shape === "walk-in"
+    ? Math.max(24, config.width - config.frontStubDepth * 2)
+    : config.width;
+  const leftJambX = config.shape === "walk-in" ? config.frontStubDepth : 0;
+  const rightJambX = config.shape === "walk-in" ? config.width - config.frontStubDepth : config.width;
+  const points: MeasuredFootprint["points"] = [
+    { id: "left-jamb", x: leftJambX, y: config.depth, type: "left-jamb" },
+    { id: "front-left", x: 0, y: config.depth, type: "corner" },
+    { id: "back-left", x: 0, y: 0, type: "corner" },
+    { id: "back-right", x: config.width, y: 0, type: "corner" },
+    { id: "front-right", x: config.width, y: config.depth, type: "corner" },
+    { id: "right-jamb", x: rightJambX, y: config.depth, type: "right-jamb" },
+  ];
+
+  if (config.shape !== "walk-in") {
+    points.splice(1, 1);
+    points.splice(points.length - 2, 1);
+  }
+
+  return {
+    source,
+    units: "in",
+    points,
+    walls: points.slice(0, -1).map((point, index) => ({
+      from: point.id,
+      to: points[index + 1].id,
+      label: index === 0 ? "left entry wall" : index === 2 ? "back wall" : "wall run",
+    })),
+    opening: {
+      leftJambId: "left-jamb",
+      rightJambId: "right-jamb",
+      width: Math.round(openingWidth),
+    },
+    confidence: source === "preset" ? 1 : 0.86,
+  };
+}
+
+export function buildMockArFootprint(config: ClosetConfig): MeasuredFootprint {
+  const points: MeasuredFootprint["points"] = [
+    { id: "left-jamb", x: config.frontStubDepth, y: config.depth, type: "left-jamb" },
+    { id: "front-left", x: 0, y: config.depth, type: "corner" },
+    { id: "left-back", x: 0, y: 0, type: "corner" },
+    { id: "jog-in", x: 42, y: 0, type: "inside-corner" },
+    { id: "column-face", x: 42, y: 14, type: "column" },
+    { id: "jog-out", x: 58, y: 14, type: "inside-corner" },
+    { id: "back-right", x: config.width, y: 0, type: "corner" },
+    { id: "front-right", x: config.width, y: config.depth, type: "corner" },
+    { id: "right-jamb", x: config.width - config.frontStubDepth, y: config.depth, type: "right-jamb" },
+  ];
+
+  return {
+    source: "mock-ar",
+    units: "in",
+    points,
+    walls: points.slice(0, -1).map((point, index) => ({
+      from: point.id,
+      to: points[index + 1].id,
+      label: index === 2 || index === 4 ? "column jog" : index === 5 ? "back wall" : "measured wall",
+    })),
+    opening: {
+      leftJambId: "left-jamb",
+      rightJambId: "right-jamb",
+      width: Math.round(config.width - config.frontStubDepth * 2),
+    },
+    confidence: 0.84,
+  };
+}
 const DEFAULT_ENABLED_PIECE_IDS = [
   "back-left-tower",
   "back-right-tower",
@@ -179,6 +249,8 @@ interface DesignStore {
 
   closetConfig: ClosetConfig;
   setClosetConfig: (update: Partial<ClosetConfig>) => void;
+  closetFootprint: MeasuredFootprint;
+  setClosetFootprint: (footprint: MeasuredFootprint) => void;
   enabledPieceIds: string[];
   setEnabledPieceIds: (ids: string[]) => void;
   shelfPositions: ShelfPositions;
@@ -189,10 +261,11 @@ function buildSnapshot(
   dimensions: ClosetDimensions,
   components: ClosetComponent[],
   closetConfig: ClosetConfig,
+  closetFootprint: MeasuredFootprint,
   enabledPieceIds: string[],
   shelfPositions: ShelfPositions
 ): DesignSnapshot {
-  return { dimensions, components, closetConfig, enabledPieceIds, shelfPositions };
+  return { dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions };
 }
 
 function sameStringArray(a: string[], b: string[]) {
@@ -250,7 +323,38 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   persistenceMessage: "Default layout loaded for walkthrough.",
 
   closetConfig: DEFAULT_CLOSET_CONFIG,
-  setClosetConfig: (update) => set((s) => ({ closetConfig: { ...s.closetConfig, ...update } })),
+  setClosetConfig: (update) => set((s) => {
+    const closetConfig = { ...s.closetConfig, ...update };
+    const shouldRegenerateFootprint =
+      update.shape !== undefined ||
+      update.width !== undefined ||
+      update.depth !== undefined ||
+      update.frontStubDepth !== undefined;
+
+    return {
+      closetConfig,
+      closetFootprint: shouldRegenerateFootprint
+        ? buildFootprintFromConfig(closetConfig)
+        : s.closetFootprint,
+    };
+  }),
+  closetFootprint: buildFootprintFromConfig(DEFAULT_CLOSET_CONFIG),
+  setClosetFootprint: (footprint) => set((s) => {
+    const xs = footprint.points.map((point) => point.x);
+    const ys = footprint.points.map((point) => point.y);
+    const width = Math.max(60, Math.round(Math.max(...xs) - Math.min(...xs)));
+    const depth = Math.max(20, Math.round(Math.max(...ys) - Math.min(...ys)));
+
+    return {
+      closetFootprint: footprint,
+      closetConfig: {
+        ...s.closetConfig,
+        width,
+        depth,
+        shape: "walk-in",
+      },
+    };
+  }),
   enabledPieceIds: DEFAULT_ENABLED_PIECE_IDS,
   setEnabledPieceIds: (ids) => set({ enabledPieceIds: ids }),
   shelfPositions: {},
@@ -305,6 +409,7 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
         dimensions: snapshot.dimensions,
         components: snapshot.components,
         closetConfig: snapshot.closetConfig ?? state.closetConfig,
+        closetFootprint: snapshot.closetFootprint ?? state.closetFootprint,
         enabledPieceIds: sameStringArray(state.enabledPieceIds, nextEnabledPieceIds)
           ? state.enabledPieceIds
           : nextEnabledPieceIds,
@@ -324,6 +429,7 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
       dimensions: snapshot.dimensions,
       components: snapshot.components,
       closetConfig: snapshot.closetConfig ?? get().closetConfig,
+      closetFootprint: snapshot.closetFootprint ?? get().closetFootprint,
       enabledPieceIds: snapshot.enabledPieceIds ?? get().enabledPieceIds,
       shelfPositions: snapshot.shelfPositions ?? get().shelfPositions,
       selectedId: null,
@@ -333,8 +439,8 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   },
 
   saveDesign: async () => {
-    const { dimensions, components, projectId, closetConfig, enabledPieceIds, shelfPositions } = get();
-    const snapshot = buildSnapshot(dimensions, components, closetConfig, enabledPieceIds, shelfPositions);
+    const { dimensions, components, projectId, closetConfig, closetFootprint, enabledPieceIds, shelfPositions } = get();
+    const snapshot = buildSnapshot(dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions);
 
     set({
       persistenceState: "saving",
@@ -403,6 +509,7 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
         dimensions: SAMPLE_SNAPSHOT.dimensions,
         components: SAMPLE_SNAPSHOT.components,
         closetConfig: DEFAULT_CLOSET_CONFIG,
+        closetFootprint: buildFootprintFromConfig(DEFAULT_CLOSET_CONFIG),
         enabledPieceIds: DEFAULT_ENABLED_PIECE_IDS,
         shelfPositions: {},
         selectedId: null,
@@ -420,7 +527,7 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
 
   clearDesign: () =>
     {
-      const emptySnapshot = buildSnapshot(get().dimensions, [], get().closetConfig, [], {});
+      const emptySnapshot = buildSnapshot(get().dimensions, [], get().closetConfig, get().closetFootprint, [], {});
       localStorage.setItem(LOCAL_STORAGE_DESIGN_KEY, JSON.stringify(emptySnapshot));
       set({
         components: [],

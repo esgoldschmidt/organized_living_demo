@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
+import type { MeasuredFootprint } from "@/types";
 
 const I = 3.0;      // SVG units per inch
 const WALL = 14;    // wall thickness in SVG units
@@ -114,12 +115,15 @@ function DragHandle({
 
 interface Props {
   config: ClosetConfig;
+  footprint: MeasuredFootprint;
   onChange: (u: Partial<ClosetConfig>) => void;
+  onFootprintChange: (footprint: MeasuredFootprint) => void;
 }
 
-export default function ClosetFloorPlan({ config, onChange }: Props) {
+export default function ClosetFloorPlan({ config, footprint, onChange, onFootprintChange }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Handle | null>(null);
+  const [pointDrag, setPointDrag] = useState<string | null>(null);
   const [hover, setHover] = useState<Handle | null>(null);
 
   const hl = hasLeft(config.shape);
@@ -151,9 +155,37 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    if (!drag) return;
     const x = toSvgX(e.clientX);
     const y = toSvgY(e.clientY);
+    if (pointDrag) {
+      const nextPoints = footprint.points.map((point) =>
+        point.id === pointDrag
+          ? {
+              ...point,
+              x: clamp(snapTo((x - ix) / I, 3), 0, config.width),
+              y: clamp(snapTo((y - iy) / I, 3), 0, config.depth),
+            }
+          : point,
+      );
+      const leftJamb = nextPoints.find((point) => point.id === footprint.opening.leftJambId);
+      const rightJamb = nextPoints.find((point) => point.id === footprint.opening.rightJambId);
+      const opening = leftJamb && rightJamb
+        ? {
+            ...footprint.opening,
+            width: Math.round(Math.hypot(rightJamb.x - leftJamb.x, rightJamb.y - leftJamb.y)),
+          }
+        : footprint.opening;
+
+      onFootprintChange({
+        ...footprint,
+        source: footprint.source === "ar" ? "ar" : "manual",
+        points: nextPoints,
+        opening,
+      });
+      return;
+    }
+
+    if (!drag) return;
     if (drag === "width") {
       onChange({ width: clamp(snapTo((x - ix) / I, 6), 60, 240) });
     } else if (drag === "depth") {
@@ -173,6 +205,12 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
     setDrag(h);
+  }
+
+  function startPointDrag(e: React.PointerEvent<SVGCircleElement>, id: string) {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    setPointDrag(id);
   }
 
   const dimY = iy + D + extraBottom + 30;
@@ -196,6 +234,14 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
   // For walk-in, keep the depth handle out of the doorway controls.
   const depthHandleCx = hfs ? dimX : ix + W / 2;
   const depthHandleCy = hfs ? iy + D / 2 : iy + D;
+  const measuredPoints = footprint.points.map((point) => ({
+    ...point,
+    sx: ix + point.x * I,
+    sy: iy + point.y * I,
+  }));
+  const footprintPath = measuredPoints.map((point) => `${point.sx},${point.sy}`).join(" ");
+  const leftJambPoint = measuredPoints.find((point) => point.id === footprint.opening.leftJambId);
+  const rightJambPoint = measuredPoints.find((point) => point.id === footprint.opening.rightJambId);
 
   return (
     <svg
@@ -204,8 +250,8 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
       className="w-full select-none"
       style={{ maxHeight: "calc(100vh - 220px)", touchAction: "none" }}
       onPointerMove={onPointerMove}
-      onPointerUp={() => { setDrag(null); setHover(null); }}
-      onPointerLeave={() => { setDrag(null); setHover(null); }}
+      onPointerUp={() => { setDrag(null); setPointDrag(null); setHover(null); }}
+      onPointerLeave={() => { setDrag(null); setPointDrag(null); setHover(null); }}
     >
       {/* ── Background grid (6" cells) ── */}
       <defs>
@@ -229,6 +275,20 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
 
       {/* ── Closet interior fill ── */}
       <rect x={ix} y={iy} width={W} height={D} fill="#eeebe4" fillOpacity={0.7} />
+
+      {/* ── Measured footprint from manual/AR points ── */}
+      <polygon points={footprintPath} fill="#dfe7e0" fillOpacity={0.34} stroke="#48645a" strokeWidth={1.5} strokeLinejoin="round" />
+      {leftJambPoint && rightJambPoint && (
+        <line
+          x1={leftJambPoint.sx}
+          y1={leftJambPoint.sy}
+          x2={rightJambPoint.sx}
+          y2={rightJambPoint.sy}
+          stroke="#8b735c"
+          strokeWidth={2}
+          strokeDasharray="6 4"
+        />
+      )}
 
       {/* ── Back wall ── */}
       <rect x={ox} y={oy} width={WALL * 2 + W} height={WALL} fill="#2c2824" />
@@ -277,6 +337,25 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
       )}
 
       {/* ── Drag handles ── */}
+      {measuredPoints.map((point) => {
+        const active = pointDrag === point.id;
+        const isJamb = point.type === "left-jamb" || point.type === "right-jamb";
+        return (
+          <g key={point.id}>
+            <circle
+              cx={point.sx}
+              cy={point.sy}
+              r={isJamb ? 10 : 8}
+              fill={active ? "#25302c" : "#fff"}
+              stroke={isJamb ? "#8b735c" : "#48645a"}
+              strokeWidth={2}
+              style={{ cursor: "grab" }}
+              onPointerDown={(event) => startPointDrag(event, point.id)}
+            />
+            <circle cx={point.sx} cy={point.sy} r={2.2} fill={active ? "#fff" : "#48645a"} pointerEvents="none" />
+          </g>
+        );
+      })}
       <DragHandle cx={rx} cy={iy + D / 2} id="width" cursor="ew-resize" {...handleProps("width")} />
       <DragHandle cx={depthHandleCx} cy={depthHandleCy} id="depth" cursor="ns-resize" {...handleProps("depth")} />
       {hl && <DragHandle cx={lzX} cy={iy + D / 2} id="leftZone" cursor="ew-resize" quiet {...handleProps("leftZone")} />}
@@ -310,6 +389,12 @@ export default function ClosetFloorPlan({ config, onChange }: Props) {
       {(drag === "frontRightStub" || hover === "frontRightStub") && (
         <text x={rx - fsd} y={iy + D + WALL + 16} textAnchor="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">entry wall</text>
+      )}
+      {pointDrag && (
+        <text x={ix + W / 2} y={iy + D + extraBottom + 48} textAnchor="middle"
+              fontSize={10} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">
+          editing measured AR-style footprint point
+        </text>
       )}
     </svg>
   );

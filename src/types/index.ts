@@ -40,6 +40,39 @@ export interface SnapshotClosetConfig {
   shape: SnapshotClosetShape;
 }
 
+export type FootprintPointType =
+  | "left-jamb"
+  | "right-jamb"
+  | "corner"
+  | "inside-corner"
+  | "column";
+
+export interface FootprintPoint {
+  id: string;
+  x: number;
+  y: number;
+  type: FootprintPointType;
+}
+
+export interface FootprintWall {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface MeasuredFootprint {
+  source: "preset" | "manual" | "mock-ar" | "ar";
+  units: "in";
+  points: FootprintPoint[];
+  walls: FootprintWall[];
+  opening: {
+    leftJambId: string;
+    rightJambId: string;
+    width: number;
+  };
+  confidence: number;
+}
+
 export interface PaletteItem {
   type: ComponentType;
   label: string;
@@ -55,6 +88,7 @@ export interface DesignSnapshot {
   dimensions: ClosetDimensions;
   components: ClosetComponent[];
   closetConfig?: SnapshotClosetConfig;
+  closetFootprint?: MeasuredFootprint;
   enabledPieceIds?: string[];
   shelfPositions?: Record<string, [number, number, number]>;
 }
@@ -98,10 +132,37 @@ export const SnapshotClosetConfigSchema = z.object({
   shape: z.enum(["straight", "left", "right", "u", "walk-in"]),
 });
 
+export const FootprintPointSchema = z.object({
+  id: z.string(),
+  x: z.number(),
+  y: z.number(),
+  type: z.enum(["left-jamb", "right-jamb", "corner", "inside-corner", "column"]),
+});
+
+export const FootprintWallSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string(),
+});
+
+export const MeasuredFootprintSchema = z.object({
+  source: z.enum(["preset", "manual", "mock-ar", "ar"]),
+  units: z.literal("in"),
+  points: z.array(FootprintPointSchema),
+  walls: z.array(FootprintWallSchema),
+  opening: z.object({
+    leftJambId: z.string(),
+    rightJambId: z.string(),
+    width: z.number(),
+  }),
+  confidence: z.number(),
+});
+
 export const DesignSnapshotSchema = z.object({
   dimensions: ClosetDimensionsSchema,
   components: z.array(ClosetComponentSchema),
   closetConfig: SnapshotClosetConfigSchema.optional(),
+  closetFootprint: MeasuredFootprintSchema.optional(),
   enabledPieceIds: z.array(z.string()).optional(),
   shelfPositions: z.record(z.string(), z.tuple([z.number(), z.number(), z.number()])).optional(),
 });

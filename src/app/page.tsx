@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Toolbar from "@/components/Toolbar";
 import ClosetFloorPlan from "@/components/ClosetFloorPlan";
-import { useDesignStore } from "@/store/designStore";
+import { buildMockArFootprint, useDesignStore } from "@/store/designStore";
 import type { ClosetShape } from "@/store/designStore";
 
 function ShapeButton({ label, sublabel, value, current, onClick }: {
@@ -55,7 +55,12 @@ const SHAPE_NAMES: Record<ClosetShape, string> = {
 };
 
 export default function Home() {
-  const { closetConfig: config, setClosetConfig } = useDesignStore();
+  const {
+    closetConfig: config,
+    closetFootprint,
+    setClosetConfig,
+    setClosetFootprint,
+  } = useDesignStore();
 
   return (
     <div className="min-h-screen bg-[#dfe7e0]">
@@ -69,6 +74,9 @@ export default function Home() {
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-widest text-[#48645a]">Floor plan · top view</div>
               <h1 className="mt-0.5 text-xl font-semibold text-[#1f2824]">{SHAPE_NAMES[config.shape]} closet</h1>
+              <p className="mt-1 text-xs text-[#6f7d76]">
+                {closetFootprint.points.length} measured points · {Math.round(closetFootprint.opening.width)}&quot; opening · {Math.round(closetFootprint.confidence * 100)}% confidence
+              </p>
             </div>
             <div className="text-right text-xs text-[#6f7d76]">
               <div className="font-semibold text-[#1f2824] text-sm">{config.width}&quot; x {config.depth}&quot;</div>
@@ -77,11 +85,16 @@ export default function Home() {
           </div>
 
           <div className="flex items-center justify-center rounded-lg bg-[#f0ece5] px-2 py-4">
-            <ClosetFloorPlan config={config} onChange={setClosetConfig} />
+            <ClosetFloorPlan
+              config={config}
+              footprint={closetFootprint}
+              onChange={setClosetConfig}
+              onFootprintChange={setClosetFootprint}
+            />
           </div>
 
           <p className="mt-3 text-xs leading-5 text-[#6f7d76]">
-            Drag the handles to set wall dimensions. Width and depth ranges are expanded for room-sized closets.
+            Drag wall handles for clean presets, or drag the round measured points to mimic an AR clockwise wall trace.
           </p>
         </div>
 
@@ -99,6 +112,23 @@ export default function Home() {
               <ShapeButton label="U-Shape" sublabel="back + both sides" value="u" current={config.shape} onClick={(s) => setClosetConfig({ shape: s })} />
               <ShapeButton label="Walk-in Room" sublabel="3 walls + entry" value="walk-in" current={config.shape} onClick={(s) => setClosetConfig({ shape: s })} />
             </div>
+          </div>
+
+          <div className="rounded-xl border border-[#cdd8d0] bg-white p-5 shadow-sm">
+            <h2 className="text-sm font-semibold text-[#1f2824]">Measure space</h2>
+            <p className="mt-1 text-xs leading-5 text-[#6f7d76]">
+              Prototype for the AR path: start at the left jamb, trace clockwise, then confirm the generated 2D shape.
+            </p>
+            <button
+              type="button"
+              onClick={() => setClosetFootprint(buildMockArFootprint(config))}
+              className="mt-3 w-full rounded-md border border-[#25302c] bg-[#25302c] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#1a2420]"
+            >
+              Mock AR scan with jog
+            </button>
+            <p className="mt-2 text-[11px] leading-4 text-[#8a9990]">
+              The scan output is saved as polygon points, not just width and depth.
+            </p>
           </div>
 
           {/* Height */}
