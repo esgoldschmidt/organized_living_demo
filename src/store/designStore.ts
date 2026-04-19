@@ -4,12 +4,19 @@ import {
   ClosetDimensions,
   ComponentType,
   DesignSnapshot,
+  MaterialLine,
   MeasuredFootprint,
   PALETTE_ITEMS,
+  ProductBlock,
+  ProductBlockKind,
+  ProductLine,
+  RoomFeature,
+  RoomFeatureKind,
 } from "@/types";
 
 export type ClosetShape = "straight" | "left" | "right" | "u" | "walk-in";
 export type ShelfPositions = Record<string, [number, number, number]>;
+type QuarterRotation = 0 | 90 | 180 | 270;
 
 export interface ClosetConfig {
   width: number;
@@ -114,14 +121,335 @@ const DEFAULT_ENABLED_PIECE_IDS = [
   "back-right-tower",
   "center-drawers",
   "center-shelves",
-  "left-rod",
-  "left-shelves",
-  "right-double-rod",
-  "right-shelves",
 ];
 
 const LOCAL_STORAGE_DESIGN_KEY = "closet-design";
 const LOCAL_STORAGE_PROJECT_KEY = "closet-project-id";
+
+function priceProductBlock(kind: ProductBlockKind, productLine: ProductLine, width: number) {
+  const baseByKind: Record<ProductBlockKind, number> = {
+    "shelf-rod": 240,
+    "double-hang": 280,
+    "drawer-stack": 740,
+    "shoe-tower": 520,
+    "open-shelves": 390,
+  };
+  const lineMultiplier = productLine === "select" ? 1.34 : 1;
+  return Math.round((baseByKind[kind] + width * 5.5) * lineMultiplier / 25) * 25;
+}
+
+function buildBlockParts(kind: ProductBlockKind, productLine: ProductLine, width: number, height: number, depth: number): ProductBlock["parts"] {
+  const railDepth = productLine === "freedomRail" ? 1.2 : 0.75;
+  const parts: ProductBlock["parts"] = [
+    { id: "rail", type: "rail", label: productLine === "freedomRail" ? "Hanging Rail" : "Back Cleat", x: 0, y: height - 4, z: -depth / 2 + railDepth / 2, width, height: 2, depth: railDepth },
+  ];
+
+  if (productLine === "select") {
+    parts.push(
+      { id: "left-panel", type: "panel", label: "Left Panel", x: -width / 2 + 0.4, y: height / 2, z: 0, width: 0.75, height, depth },
+      { id: "right-panel", type: "panel", label: "Right Panel", x: width / 2 - 0.4, y: height / 2, z: 0, width: 0.75, height, depth },
+    );
+  } else {
+    parts.push(
+      { id: "left-upright", type: "upright", label: "Upright", x: -width / 2 + 3, y: height / 2, z: -depth / 2 + 1.2, width: 1.2, height: height - 8, depth: 1 },
+      { id: "right-upright", type: "upright", label: "Upright", x: width / 2 - 3, y: height / 2, z: -depth / 2 + 1.2, width: 1.2, height: height - 8, depth: 1 },
+    );
+  }
+
+  if (kind === "shelf-rod") {
+    parts.push(
+      { id: "top-shelf", type: "shelf", label: "Shelf", x: 0, y: height - 16, z: 0, width, height: 1.25, depth },
+      { id: "rod", type: "rod", label: "Rod", x: 0, y: height - 28, z: depth / 2 - 2.5, width: width - 4, height: 1, depth: 1 },
+    );
+  }
+
+  if (kind === "double-hang") {
+    parts.push(
+      { id: "upper-shelf", type: "shelf", label: "Upper Shelf", x: 0, y: height - 15, z: 0, width, height: 1.25, depth },
+      { id: "upper-rod", type: "rod", label: "Upper Rod", x: 0, y: height - 28, z: depth / 2 - 2.5, width: width - 4, height: 1, depth: 1 },
+      { id: "lower-shelf", type: "shelf", label: "Lower Shelf", x: 0, y: height / 2 - 4, z: 0, width, height: 1.25, depth },
+      { id: "lower-rod", type: "rod", label: "Lower Rod", x: 0, y: height / 2 - 17, z: depth / 2 - 2.5, width: width - 4, height: 1, depth: 1 },
+    );
+  }
+
+  if (kind === "drawer-stack") {
+    parts.push(
+      { id: "top-shelf", type: "shelf", label: "Shelf", x: 0, y: height - 12, z: 0, width, height: 1.25, depth },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        id: `drawer-${index + 1}`,
+        type: "drawer" as const,
+        label: "Soft-close Drawer",
+        x: 0,
+        y: 11 + index * 9,
+        z: depth / 2 - 1.2,
+        width: width - 3,
+        height: 7,
+        depth: 2,
+      })),
+    );
+  }
+
+  if (kind === "shoe-tower") {
+    parts.push(...Array.from({ length: 5 }, (_, index) => ({
+      id: `shoe-${index + 1}`,
+      type: "shoe-shelf" as const,
+      label: "Angled Shoe Shelf",
+      x: 0,
+      y: 10 + index * 11,
+      z: 0,
+      width: width - 2,
+      height: 1.1,
+      depth,
+    })));
+  }
+
+  if (kind === "open-shelves") {
+    parts.push(...Array.from({ length: 5 }, (_, index) => ({
+      id: `shelf-${index + 1}`,
+      type: "shelf" as const,
+      label: "Adjustable Shelf",
+      x: 0,
+      y: 10 + index * ((height - 20) / 4),
+      z: 0,
+      width: width - 2,
+      height: 1.25,
+      depth,
+    })));
+  }
+
+  return parts;
+}
+
+export function createProductBlock(
+  kind: ProductBlockKind,
+  options: Partial<Pick<ProductBlock, "id" | "name" | "productLine" | "finish" | "width" | "height" | "depth">> = {}
+): ProductBlock {
+  const productLine = options.productLine ?? (kind === "drawer-stack" ? "select" : "freedomRail");
+  const width = options.width ?? (kind === "drawer-stack" ? 30 : kind === "open-shelves" ? 30 : 48);
+  const height = options.height ?? (productLine === "select" ? 84 : 72);
+  const depth = options.depth ?? (productLine === "select" ? 14 : 12);
+  const nameByKind: Record<ProductBlockKind, string> = {
+    "shelf-rod": "Shelf + Rod",
+    "double-hang": "Double Hang",
+    "drawer-stack": "Drawer Stack",
+    "shoe-tower": "Shoe Tower",
+    "open-shelves": "Open Shelves",
+  };
+
+  return {
+    id: options.id ?? nanoidSimple(),
+    name: options.name ?? nameByKind[kind],
+    kind,
+    productLine,
+    finish: options.finish ?? (productLine === "select" ? "Snowdrift Live" : "White"),
+    width,
+    height,
+    depth,
+    parts: buildBlockParts(kind, productLine, width, height, depth),
+    price: priceProductBlock(kind, productLine, width),
+  };
+}
+
+function rebuildProductBlock(block: ProductBlock, update: Partial<ProductBlock>): ProductBlock {
+  const next = { ...block, ...update };
+  return {
+    ...next,
+    parts: buildBlockParts(next.kind, next.productLine, next.width, next.height, next.depth),
+    price: priceProductBlock(next.kind, next.productLine, next.width),
+  };
+}
+
+const DEFAULT_PRODUCT_BLOCKS: ProductBlock[] = [
+  createProductBlock("shelf-rod", { id: "block-shelf-rod", width: 48 }),
+  createProductBlock("drawer-stack", { id: "block-drawer-stack", width: 30 }),
+];
+
+function countBlockParts(blocks: ProductBlock[]) {
+  return blocks.flatMap((block) => block.parts).reduce((counts, part) => {
+    counts[part.type] = (counts[part.type] ?? 0) + 1;
+    return counts;
+  }, {} as Record<ProductBlock["parts"][number]["type"], number>);
+}
+
+export function buildMaterialList(blocks: ProductBlock[], config: ClosetConfig): MaterialLine[] {
+  const counts = countBlockParts(blocks);
+  const railFootage = Math.ceil(blocks.reduce((sum, block) => {
+    const railWidth = block.parts
+      .filter((part) => part.type === "rail")
+      .reduce((partSum, part) => partSum + part.width, 0);
+    return sum + railWidth / 12;
+  }, 0));
+  const shelfCount = (counts.shelf ?? 0) + (counts["shoe-shelf"] ?? 0);
+  const rodCount = counts.rod ?? 0;
+  const drawerCount = counts.drawer ?? 0;
+  const panelCount = counts.panel ?? 0;
+  const uprightCount = counts.upright ?? 0;
+  const railCount = counts.rail ?? 0;
+  const blockCount = blocks.length;
+  const screwEach = Math.max(0, Math.ceil((railCount * 8 + shelfCount * 4 + drawerCount * 6 + panelCount * 8 + uprightCount * 3) / 25) * 25);
+  const anchorEach = Math.max(0, railCount * 4 + Math.ceil(config.width / 24));
+  const supportEach = shelfCount * 4;
+
+  const lines: MaterialLine[] = [];
+  const add = (line: Omit<MaterialLine, "id">) => {
+    if (line.qty <= 0) return;
+    lines.push({ ...line, id: line.sku.toLowerCase() });
+  };
+
+  add({
+    sku: "OL-RAIL-FT",
+    name: "Wall rail / cleat length",
+    category: "manufactured",
+    qty: railFootage,
+    unit: "ft",
+    unitPrice: 9,
+    note: `${railCount} rail section${railCount === 1 ? "" : "s"} cut to block widths`,
+  });
+  add({
+    sku: "OL-UPRIGHT",
+    name: "Vertical uprights",
+    category: "manufactured",
+    qty: uprightCount,
+    unit: "each",
+    unitPrice: 18,
+    note: "Mock freedomRail upright count from block parts",
+  });
+  add({
+    sku: "OL-SHELF",
+    name: "Shelves",
+    category: "manufactured",
+    qty: shelfCount,
+    unit: "each",
+    unitPrice: 42,
+    note: "Includes flat and angled shoe shelves",
+  });
+  add({
+    sku: "OL-ROD",
+    name: "Hanging rods",
+    category: "manufactured",
+    qty: rodCount,
+    unit: "each",
+    unitPrice: 22,
+    note: "Cut per block width",
+  });
+  add({
+    sku: "OL-DRAWER",
+    name: "Drawer boxes/fronts",
+    category: "manufactured",
+    qty: drawerCount,
+    unit: "each",
+    unitPrice: 85,
+    note: "Mock Select drawer assemblies",
+  });
+  add({
+    sku: "OL-PANEL",
+    name: "Side panels",
+    category: "manufactured",
+    qty: panelCount,
+    unit: "each",
+    unitPrice: 96,
+    note: "Required when a block has exposed construction sides",
+  });
+  add({
+    sku: "HW-RAIL-SCREW-PACK",
+    name: "Rail fastener packs",
+    category: "hardware",
+    qty: Math.ceil(Math.max(railFootage, 1) / 4),
+    unit: "pack",
+    unitPrice: 12,
+    note: "Mock pack count: one pack per 4 ft of wall rail",
+  });
+  add({
+    sku: "HW-SCREW-8",
+    name: "#8 installation screws",
+    category: "hardware",
+    qty: screwEach,
+    unit: "each",
+    unitPrice: 0.12,
+    note: "Screws for rails, panels, shelves, and drawer hardware",
+  });
+  add({
+    sku: "HW-ANCHOR",
+    name: "Wall anchors",
+    category: "hardware",
+    qty: anchorEach,
+    unit: "each",
+    unitPrice: 0.35,
+    note: "Used where rail fasteners do not hit framing",
+  });
+  add({
+    sku: "HW-SHELF-SUPPORT",
+    name: "Shelf supports",
+    category: "hardware",
+    qty: supportEach,
+    unit: "each",
+    unitPrice: 0.65,
+    note: "Four supports per shelf in this mock BOM",
+  });
+  add({
+    sku: "HW-ROD-CUP",
+    name: "Rod cups",
+    category: "hardware",
+    qty: rodCount * 2,
+    unit: "each",
+    unitPrice: 3,
+    note: "One pair per hanging rod",
+  });
+  add({
+    sku: "INSTALL-KIT",
+    name: "Installer consumables kit",
+    category: "install",
+    qty: Math.max(1, Math.ceil(blockCount / 3)),
+    unit: "set",
+    unitPrice: 28,
+    note: "Touch-up caps, shims, labels, and small consumables",
+  });
+
+  return lines;
+}
+
+function createRoomFeature(kind: RoomFeatureKind, config: ClosetConfig): RoomFeature {
+  const defaults: Record<RoomFeatureKind, Omit<RoomFeature, "id" | "x" | "y">> = {
+    column: {
+      kind: "column",
+      label: "Column",
+      width: 18,
+      depth: 14,
+      height: config.height,
+      elevation: 0,
+      rotation: 0,
+      behavior: "obstruction",
+    },
+    "air-register": {
+      kind: "air-register",
+      label: "Air Register",
+      width: 14,
+      depth: 6,
+      height: 1,
+      elevation: 0,
+      rotation: 0,
+      behavior: "clearance-zone",
+    },
+    "access-panel": {
+      kind: "access-panel",
+      label: "Access Panel",
+      width: 18,
+      depth: 2,
+      height: 18,
+      elevation: 36,
+      rotation: 0,
+      behavior: "clearance-zone",
+    },
+  };
+
+  const feature = defaults[kind];
+  return {
+    id: nanoidSimple(),
+    ...feature,
+    x: Math.round(config.width / 2 - feature.width / 2),
+    y: kind === "access-panel" ? 0 : Math.round(config.depth / 2 - feature.depth / 2),
+  };
+}
 
 const SAMPLE_DIMENSIONS: ClosetDimensions = {
   width: 120,
@@ -259,6 +587,24 @@ interface DesignStore {
   setEnabledPieceIds: (ids: string[]) => void;
   shelfPositions: ShelfPositions;
   setShelfPositions: (positions: ShelfPositions) => void;
+  pieceRotations: Record<string, 0 | 90 | 180 | 270>;
+  setPieceRotations: (rotations: Record<string, 0 | 90 | 180 | 270>) => void;
+  productBlocks: ProductBlock[];
+  selectedBlockId: string | null;
+  setSelectedBlockId: (id: string | null) => void;
+  addProductBlock: (kind: ProductBlockKind) => void;
+  updateProductBlock: (id: string, update: Partial<ProductBlock>) => void;
+  removeProductBlock: (id: string) => void;
+  setProductBlocks: (blocks: ProductBlock[]) => void;
+  blockPositions: ShelfPositions;
+  setBlockPositions: (positions: ShelfPositions) => void;
+  blockRotations: Record<string, QuarterRotation>;
+  setBlockRotations: (rotations: Record<string, QuarterRotation>) => void;
+  roomFeatures: RoomFeature[];
+  setRoomFeatures: (features: RoomFeature[]) => void;
+  addRoomFeature: (kind: RoomFeatureKind) => void;
+  updateRoomFeature: (id: string, update: Partial<RoomFeature>) => void;
+  removeRoomFeature: (id: string) => void;
 }
 
 function buildSnapshot(
@@ -267,9 +613,14 @@ function buildSnapshot(
   closetConfig: ClosetConfig,
   closetFootprint: MeasuredFootprint,
   enabledPieceIds: string[],
-  shelfPositions: ShelfPositions
+  shelfPositions: ShelfPositions,
+  pieceRotations: Record<string, 0 | 90 | 180 | 270>,
+  productBlocks: ProductBlock[],
+  blockPositions: ShelfPositions,
+  blockRotations: Record<string, QuarterRotation>,
+  roomFeatures: RoomFeature[]
 ): DesignSnapshot {
-  return { dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions };
+  return { dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions, pieceRotations, productBlocks, blockPositions, blockRotations, roomFeatures };
 }
 
 function sameStringArray(a: string[], b: string[]) {
@@ -363,6 +714,60 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   setEnabledPieceIds: (ids) => set({ enabledPieceIds: ids }),
   shelfPositions: {},
   setShelfPositions: (positions) => set({ shelfPositions: positions }),
+  pieceRotations: {},
+  setPieceRotations: (rotations) => set({ pieceRotations: rotations }),
+  productBlocks: DEFAULT_PRODUCT_BLOCKS,
+  selectedBlockId: DEFAULT_PRODUCT_BLOCKS[0]?.id ?? null,
+  setSelectedBlockId: (id) => set({ selectedBlockId: id }),
+  addProductBlock: (kind) => set((state) => {
+    const block = createProductBlock(kind);
+    return {
+      productBlocks: [...state.productBlocks, block],
+      selectedBlockId: block.id,
+      blockPositions: {},
+      blockRotations: {},
+    };
+  }),
+  updateProductBlock: (id, update) => set((state) => {
+    const current = state.productBlocks.find((block) => block.id === id);
+    const shouldResetPlacement = Boolean(
+      current &&
+      ((update.width !== undefined && update.width !== current.width) ||
+        (update.height !== undefined && update.height !== current.height) ||
+        (update.depth !== undefined && update.depth !== current.depth) ||
+        (update.productLine !== undefined && update.productLine !== current.productLine))
+    );
+
+    return {
+      productBlocks: state.productBlocks.map((block) => block.id === id ? rebuildProductBlock(block, update) : block),
+      blockPositions: shouldResetPlacement
+        ? Object.fromEntries(Object.entries(state.blockPositions).filter(([blockId]) => blockId !== id))
+        : state.blockPositions,
+      blockRotations: shouldResetPlacement
+        ? Object.fromEntries(Object.entries(state.blockRotations).filter(([blockId]) => blockId !== id)) as Record<string, QuarterRotation>
+        : state.blockRotations,
+    };
+  }),
+  removeProductBlock: (id) => set((state) => ({
+    productBlocks: state.productBlocks.filter((block) => block.id !== id),
+    selectedBlockId: state.selectedBlockId === id ? state.productBlocks.find((block) => block.id !== id)?.id ?? null : state.selectedBlockId,
+    blockPositions: Object.fromEntries(Object.entries(state.blockPositions).filter(([blockId]) => blockId !== id)),
+    blockRotations: Object.fromEntries(Object.entries(state.blockRotations).filter(([blockId]) => blockId !== id)) as Record<string, QuarterRotation>,
+  })),
+  setProductBlocks: (blocks) => set({ productBlocks: blocks, selectedBlockId: blocks[0]?.id ?? null }),
+  blockPositions: {},
+  setBlockPositions: (positions) => set({ blockPositions: positions }),
+  blockRotations: {},
+  setBlockRotations: (rotations) => set({ blockRotations: rotations }),
+  roomFeatures: [],
+  setRoomFeatures: (features) => set({ roomFeatures: features }),
+  addRoomFeature: (kind) => set((state) => ({ roomFeatures: [...state.roomFeatures, createRoomFeature(kind, state.closetConfig)] })),
+  updateRoomFeature: (id, update) => set((state) => ({
+    roomFeatures: state.roomFeatures.map((feature) => feature.id === id ? { ...feature, ...update } : feature),
+  })),
+  removeRoomFeature: (id) => set((state) => ({
+    roomFeatures: state.roomFeatures.filter((feature) => feature.id !== id),
+  })),
 
   setDimensions: (d) =>
     set((s) => ({ dimensions: { ...s.dimensions, ...d } })),
@@ -418,6 +823,11 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
           ? state.enabledPieceIds
           : nextEnabledPieceIds,
         shelfPositions: snapshot.shelfPositions ?? state.shelfPositions,
+        pieceRotations: snapshot.pieceRotations ?? state.pieceRotations,
+        productBlocks: snapshot.productBlocks ?? state.productBlocks,
+        blockPositions: snapshot.blockPositions ?? state.blockPositions,
+        blockRotations: snapshot.blockRotations ?? state.blockRotations,
+        roomFeatures: snapshot.roomFeatures ?? state.roomFeatures,
         selectedId: null,
       };
     }),
@@ -436,6 +846,12 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
       closetFootprint: snapshot.closetFootprint ?? get().closetFootprint,
       enabledPieceIds: snapshot.enabledPieceIds ?? get().enabledPieceIds,
       shelfPositions: snapshot.shelfPositions ?? get().shelfPositions,
+      pieceRotations: snapshot.pieceRotations ?? get().pieceRotations,
+      productBlocks: snapshot.productBlocks ?? get().productBlocks,
+      selectedBlockId: snapshot.productBlocks?.[0]?.id ?? get().selectedBlockId,
+      blockPositions: snapshot.blockPositions ?? get().blockPositions,
+      blockRotations: snapshot.blockRotations ?? get().blockRotations,
+      roomFeatures: snapshot.roomFeatures ?? get().roomFeatures,
       selectedId: null,
       persistenceState: "saved",
       persistenceMessage: options?.message ?? "Loaded saved layout.",
@@ -443,8 +859,8 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   },
 
   saveDesign: async () => {
-    const { dimensions, components, projectId, closetConfig, closetFootprint, enabledPieceIds, shelfPositions } = get();
-    const snapshot = buildSnapshot(dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions);
+    const { dimensions, components, projectId, closetConfig, closetFootprint, enabledPieceIds, shelfPositions, pieceRotations, productBlocks, blockPositions, blockRotations, roomFeatures } = get();
+    const snapshot = buildSnapshot(dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions, pieceRotations, productBlocks, blockPositions, blockRotations, roomFeatures);
 
     set({
       persistenceState: "saving",
@@ -516,6 +932,12 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
         closetFootprint: buildFootprintFromConfig(DEFAULT_CLOSET_CONFIG),
         enabledPieceIds: DEFAULT_ENABLED_PIECE_IDS,
         shelfPositions: {},
+        pieceRotations: {},
+        productBlocks: DEFAULT_PRODUCT_BLOCKS,
+        selectedBlockId: DEFAULT_PRODUCT_BLOCKS[0]?.id ?? null,
+        blockPositions: {},
+        blockRotations: {},
+        roomFeatures: [],
         selectedId: null,
         persistenceState: "idle",
         persistenceMessage: "Loaded the default walkthrough layout.",
@@ -531,12 +953,18 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
 
   clearDesign: () =>
     {
-      const emptySnapshot = buildSnapshot(get().dimensions, [], get().closetConfig, get().closetFootprint, [], {});
+      const emptySnapshot = buildSnapshot(get().dimensions, [], get().closetConfig, get().closetFootprint, [], {}, {}, [], {}, {}, []);
       localStorage.setItem(LOCAL_STORAGE_DESIGN_KEY, JSON.stringify(emptySnapshot));
       set({
         components: [],
         enabledPieceIds: [],
         shelfPositions: {},
+        pieceRotations: {},
+        productBlocks: [],
+        selectedBlockId: null,
+        blockPositions: {},
+        blockRotations: {},
+        roomFeatures: [],
         selectedId: null,
         persistenceState: "idle",
         persistenceMessage: "Canvas cleared.",

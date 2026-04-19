@@ -40,6 +40,11 @@ export default function Toolbar() {
     closetFootprint,
     enabledPieceIds,
     shelfPositions,
+    pieceRotations,
+    productBlocks,
+    blockPositions,
+    blockRotations,
+    roomFeatures,
     projectId,
     persistenceState,
     persistenceMessage,
@@ -82,7 +87,7 @@ export default function Toolbar() {
   }, [persistenceMessage, persistenceState]);
 
   const exportJSON = () => {
-    const data = JSON.stringify({ dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions }, null, 2);
+    const data = JSON.stringify({ dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions, pieceRotations, productBlocks, blockPositions, blockRotations, roomFeatures }, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

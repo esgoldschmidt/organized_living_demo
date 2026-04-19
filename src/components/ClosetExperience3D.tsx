@@ -6,18 +6,20 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { ContactShadows, Html, Line, RoundedBox, Text } from "@react-three/drei";
 import * as THREE from "three";
 import Link from "next/link";
-import { useDesignStore } from "@/store/designStore";
+import { buildMaterialList, useDesignStore } from "@/store/designStore";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
-import type { ClosetComponent, MeasuredFootprint } from "@/types";
+import type { ClosetComponent, MeasuredFootprint, ProductBlock, ProductBlockPart, ProductLine, RoomFeature } from "@/types";
 
 const SHELF_THICKNESS = 2.5;
 const WALL_THICKNESS = 8;
 
-type ViewMode = "closet" | "open" | "inspection";
+type ViewMode = "closet" | "inspection";
 type CameraView = "corner" | "front" | "top" | "detail";
 type WallVisibility = "full" | "smart" | "open";
 type ValidationStatus = "valid" | "warning" | "error";
 type ShelfPositions = Record<string, [number, number, number]>;
+type ModuleRotation = 0 | 90 | 180 | 270;
+type PieceRotations = Record<string, ModuleRotation>;
 type DesignConfig = ClosetConfig;
 
 interface ShelfValidation {
@@ -126,7 +128,7 @@ function buildShelves(config: DesignConfig, positions: ShelfPositions): ShelfCom
   if (includesLeft(config.shape)) {
     baseShelves.push({
       id: "left",
-      name: "Left Return",
+      name: "Left Wall Shelf",
       basePosition: [-config.width / 2 + config.leftReturn / 2, config.shelfHeight, 0],
       dimensions: [config.leftReturn, SHELF_THICKNESS, config.shelfDepth],
     });
@@ -135,7 +137,7 @@ function buildShelves(config: DesignConfig, positions: ShelfPositions): ShelfCom
   if (includesRight(config.shape)) {
     baseShelves.push({
       id: "right",
-      name: "Right Return",
+      name: "Right Wall Shelf",
       basePosition: [config.width / 2 - config.rightReturn / 2 + config.rightOffset, config.shelfHeight, 0],
       dimensions: [config.rightReturn, SHELF_THICKNESS, config.shelfDepth],
     });
@@ -164,7 +166,6 @@ type PieceId =
 const PIECE_GROUPS: {
   zone: string;
   pieces: { id: PieceId; label: string; detail: string; price: number; qty: number }[];
-  requires?: "left" | "right";
 }[] = [
   { zone: "Back – Left", pieces: [{ id: "back-left-tower", label: "Tower Shelves", detail: "5 levels", price: 285, qty: 1 }] },
   {
@@ -176,16 +177,14 @@ const PIECE_GROUPS: {
   },
   { zone: "Back – Right", pieces: [{ id: "back-right-tower", label: "Tower Shelves", detail: "5 levels", price: 285, qty: 1 }] },
   {
-    zone: "Left Return",
-    requires: "left",
+    zone: "Side Modules",
     pieces: [
       { id: "left-rod", label: "Hanging Rod", detail: "single hang", price: 145, qty: 1 },
       { id: "left-shelves", label: "Shelves", detail: "3 levels", price: 175, qty: 1 },
     ],
   },
   {
-    zone: "Right Return",
-    requires: "right",
+    zone: "Additional Side Modules",
     pieces: [
       { id: "right-double-rod", label: "Double Hang", detail: "short × 2", price: 215, qty: 1 },
       { id: "right-shelves", label: "Shelves", detail: "3 levels", price: 175, qty: 1 },
@@ -203,16 +202,12 @@ function isPieceId(id: string): id is PieceId {
   return PIECE_IDS.has(id as PieceId);
 }
 
-function getVisiblePieceGroups(config: DesignConfig) {
-  return PIECE_GROUPS.filter((group) =>
-    !group.requires ||
-    (group.requires === "left" && includesLeft(config.shape)) ||
-    (group.requires === "right" && includesRight(config.shape))
-  );
+function getVisiblePieceGroups() {
+  return PIECE_GROUPS;
 }
 
-function getActivePieces(config: DesignConfig, enabledPieces: Set<PieceId>) {
-  return getVisiblePieceGroups(config)
+function getActivePieces(_config: DesignConfig, enabledPieces: Set<PieceId>) {
+  return getVisiblePieceGroups()
     .flatMap((group) => group.pieces.map((piece) => ({ ...piece, zone: group.zone })))
     .filter((piece) => enabledPieces.has(piece.id));
 }
@@ -222,9 +217,9 @@ function getComponentsSubtotal(config: DesignConfig, enabledPieces: Set<PieceId>
 }
 
 function getProjectAllowances(config: DesignConfig) {
-  const linearRun = config.width + (includesLeft(config.shape) ? config.leftReturn : 0) + (includesRight(config.shape) ? config.rightReturn : 0);
+  const linearRun = config.width;
   const materialAllowance = Math.round((linearRun * 4 + Math.max(0, config.height - 96) * 12) / 25) * 25;
-  const installAllowance = 1600 + (config.shape === "walk-in" ? 250 : 0);
+  const installAllowance = 1600;
   return { materialAllowance, installAllowance, linearRun };
 }
 
@@ -240,19 +235,19 @@ function getStorageStats(config: DesignConfig, enabledPieces: Set<PieceId>, shel
     (enabledPieces.has("back-left-tower") ? 5 : 0) +
     (enabledPieces.has("back-right-tower") ? 5 : 0) +
     (enabledPieces.has("center-shelves") ? 3 : 0) +
-    (enabledPieces.has("left-shelves") && includesLeft(config.shape) ? 4 : 0) +
-    (enabledPieces.has("right-shelves") && includesRight(config.shape) ? 3 : 0);
+    (enabledPieces.has("left-shelves") ? 4 : 0) +
+    (enabledPieces.has("right-shelves") ? 3 : 0);
   const drawerCount = enabledPieces.has("center-drawers") ? 5 : 0;
   const rodFeet =
-    (enabledPieces.has("left-rod") && includesLeft(config.shape) ? config.leftReturn : 0) +
-    (enabledPieces.has("right-double-rod") && includesRight(config.shape) ? config.rightReturn * 2 : 0);
+    (enabledPieces.has("left-rod") ? config.leftReturn : 0) +
+    (enabledPieces.has("right-double-rod") ? config.rightReturn * 2 : 0);
   const shelfFeet = Math.round(
     (shelves.reduce((sum, shelf) => sum + shelf.dimensions[0], 0) +
       (enabledPieces.has("back-left-tower") ? (config.width / 3) * 5 : 0) +
       (enabledPieces.has("back-right-tower") ? (config.width / 3) * 5 : 0) +
       (enabledPieces.has("center-shelves") ? (config.width / 3) * 3 : 0) +
-      (enabledPieces.has("left-shelves") && includesLeft(config.shape) ? config.leftReturn * 4 : 0) +
-      (enabledPieces.has("right-shelves") && includesRight(config.shape) ? config.rightReturn * 3 : 0)) /
+      (enabledPieces.has("left-shelves") ? config.leftReturn * 4 : 0) +
+      (enabledPieces.has("right-shelves") ? config.rightReturn * 3 : 0)) /
       12
   );
   const activeWarnings = shelves.filter((shelf) => shelf.validation.status !== "valid");
@@ -267,67 +262,8 @@ function getStorageStats(config: DesignConfig, enabledPieces: Set<PieceId>, shel
   };
 }
 
-// ClosetBuiltIn — fixed shell that priced modules snap into
-function ClosetBuiltIn({ config }: { config: DesignConfig }) {
-  const T = 0.75;
-  const plinthH = 4;
-  const crownH = 4;
-  const halfW = config.width / 2;
-  const halfD = config.depth / 2;
-  const sD = config.shelfDepth;
-  const bZ = -halfD + sD / 2;
-  const topY = config.height - crownH;
-  const zoneW = config.width / 3;
-
-  function wb(x: number, y: number, z: number, w: number, h: number, d: number, k: string) {
-    return (
-      <RoundedBox key={k} args={[w, h, d]} radius={Math.min(0.35, w / 20, d / 20)} smoothness={3} position={[x, y, z]} castShadow receiveShadow>
-        <meshStandardMaterial color="#f6f5f1" roughness={0.17} metalness={0.0} />
-      </RoundedBox>
-    );
-  }
-
-  return (
-    <group>
-      {/* ── BACK WALL: plinth + crown ── */}
-      {wb(0, plinthH / 2, bZ, config.width - T * 2, plinthH, sD, "bp")}
-      {wb(0, topY + crownH / 2, bZ, config.width - T * 2, crownH, sD, "bc")}
-
-      {/* ── BACK WALL: zone dividers ── */}
-      {wb(-halfW + zoneW, config.height / 2, bZ, T, config.height - plinthH - crownH, sD, "dl")}
-      {wb(halfW - zoneW, config.height / 2, bZ, T, config.height - plinthH - crownH, sD, "dr")}
-
-      {/* ── LEFT RETURN ── */}
-      {includesLeft(config.shape) && (() => {
-        const rW = config.leftReturn - T * 2;
-        const rX = -halfW + config.leftReturn / 2;
-        return (
-          <>
-            {wb(rX, plinthH / 2, 0, rW, plinthH, sD, "lrp")}
-            {wb(rX, topY + crownH / 2, 0, rW, crownH, sD, "lrc")}
-            {wb(-halfW + config.leftReturn + T / 2, config.height / 2, 0, T, config.height, sD, "lrd")}
-          </>
-        );
-      })()}
-
-      {/* ── RIGHT RETURN ── */}
-      {includesRight(config.shape) && (() => {
-        const rW = config.rightReturn - T * 2;
-        const rX = halfW - config.rightReturn / 2;
-        return (
-          <>
-            {wb(rX, plinthH / 2, 0, rW, plinthH, sD, "rrp")}
-            {wb(rX, topY + crownH / 2, 0, rW, crownH, sD, "rrc")}
-            {wb(halfW - config.rightReturn - T / 2, config.height / 2, 0, T, config.height, sD, "rrd")}
-          </>
-        );
-      })()}
-    </group>
-  );
-}
-
 interface PieceModule {
-  id: PieceId;
+  id: string;
   label: string;
   detail: string;
   price: number;
@@ -335,14 +271,299 @@ interface PieceModule {
   basePosition: [number, number, number];
   position: [number, number, number];
   dimensions: [number, number, number];
+  rotation: ModuleRotation;
+  panels: ResolvedPanels;
+  productLine?: ProductLine;
+  finish?: string;
+  parts?: ProductBlockPart[];
 }
 
-function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, positions: ShelfPositions): PieceModule[] {
+interface ResolvedPanels {
+  left: boolean;
+  right: boolean;
+  back: boolean;
+  coveredBy: Partial<Record<"left" | "right" | "back", string>>;
+}
+
+function getPlanDimensions(dimensions: [number, number, number], rotation: ModuleRotation) {
+  const [w, , d] = dimensions;
+  return rotation === 90 || rotation === 270 ? { width: d, depth: w } : { width: w, depth: d };
+}
+
+function rotateLocalPlanVector(x: number, z: number, rotation: ModuleRotation) {
+  const radians = THREE.MathUtils.degToRad(rotation);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return {
+    x: x * cos + z * sin,
+    z: -x * sin + z * cos,
+  };
+}
+
+function getFaceWorldInfo(module: Pick<PieceModule, "position" | "dimensions" | "rotation">, face: "left" | "right" | "back") {
+  const [w, , d] = module.dimensions;
+  const local =
+    face === "left"
+      ? { normal: [-1, 0] as const, offset: [-w / 2, 0] as const }
+      : face === "right"
+        ? { normal: [1, 0] as const, offset: [w / 2, 0] as const }
+        : { normal: [0, -1] as const, offset: [0, -d / 2] as const };
+  const normal = rotateLocalPlanVector(local.normal[0], local.normal[1], module.rotation);
+  const offset = rotateLocalPlanVector(local.offset[0], local.offset[1], module.rotation);
+
+  return {
+    normal,
+    center: {
+      x: module.position[0] + offset.x,
+      z: module.position[2] + offset.z,
+    },
+  };
+}
+
+function getWallCoverForFace(config: DesignConfig, module: Pick<PieceModule, "position" | "dimensions" | "rotation">, face: "left" | "right" | "back") {
+  const tolerance = 1.5;
+  const info = getFaceWorldInfo(module, face);
+  const leftWall = -config.width / 2;
+  const rightWall = config.width / 2;
+  const backWall = -config.depth / 2;
+
+  if (Math.abs(info.center.z - backWall) <= tolerance && info.normal.z < -0.72) return "back wall";
+  if (includesLeft(config.shape) && Math.abs(info.center.x - leftWall) <= tolerance && info.normal.x < -0.72) return "left wall";
+  if (includesRight(config.shape) && Math.abs(info.center.x - rightWall) <= tolerance && info.normal.x > 0.72) return "right wall";
+
+  return null;
+}
+
+function resolvePanels(config: DesignConfig, module: Pick<PieceModule, "position" | "dimensions" | "rotation">): ResolvedPanels {
+  const coveredBy: ResolvedPanels["coveredBy"] = {};
+  (["left", "right", "back"] as const).forEach((face) => {
+    const wall = getWallCoverForFace(config, module, face);
+    if (wall) coveredBy[face] = wall;
+  });
+
+  return {
+    left: !coveredBy.left,
+    right: !coveredBy.right,
+    back: !coveredBy.back,
+    coveredBy,
+  };
+}
+
+function getPanelCount(panels: ResolvedPanels) {
+  return Number(panels.left) + Number(panels.right) + Number(panels.back);
+}
+
+function getModulePlanBounds(module: Pick<PieceModule, "position" | "dimensions" | "rotation">) {
+  const plan = getPlanDimensions(module.dimensions, module.rotation);
+
+  return {
+    left: module.position[0] - plan.width / 2,
+    right: module.position[0] + plan.width / 2,
+    back: module.position[2] - plan.depth / 2,
+    front: module.position[2] + plan.depth / 2,
+  };
+}
+
+function getFeaturePlanBounds(config: DesignConfig, feature: RoomFeature) {
+  const center = getFeatureWorldPosition(config, feature);
+  const plan = getFeaturePlanSize(feature);
+
+  return {
+    left: center[0] - plan.width / 2,
+    right: center[0] + plan.width / 2,
+    back: center[2] - plan.depth / 2,
+    front: center[2] + plan.depth / 2,
+  };
+}
+
+function boundsOverlap(
+  a: ReturnType<typeof getModulePlanBounds>,
+  b: ReturnType<typeof getFeaturePlanBounds>
+) {
+  return a.left < b.right && a.right > b.left && a.back < b.front && a.front > b.back;
+}
+
+function getFeatureWorldPosition(config: DesignConfig, feature: RoomFeature): [number, number, number] {
+  const plan = getFeaturePlanSize(feature);
+
+  return [
+    feature.x + plan.width / 2 - config.width / 2,
+    feature.elevation + feature.height / 2,
+    feature.y + plan.depth / 2 - config.depth / 2,
+  ];
+}
+
+function getFeaturePlanSize(feature: RoomFeature) {
+  return (feature.rotation ?? 0) === 90
+    ? { width: feature.depth, depth: feature.width }
+    : { width: feature.width, depth: feature.depth };
+}
+
+function getFeatureBlockMessage(feature: RoomFeature, module: PieceModule) {
+  if (feature.kind === "access-panel") {
+    return `${module.label} blocks ${feature.label.toLowerCase()}. Keep service panels fully clear.`;
+  }
+
+  if (feature.kind === "air-register") {
+    return `${module.label} sits on ${feature.label.toLowerCase()}. Floor registers cannot be covered.`;
+  }
+
+  return `${module.label} intersects ${feature.label.toLowerCase()}.`;
+}
+
+function getFeaturePlacementNotes(config: DesignConfig, modules: PieceModule[], features: RoomFeature[]) {
+  return features.flatMap((feature) => {
+    const featureBounds = getFeaturePlanBounds(config, feature);
+    const touchedModules = modules.filter((module) => boundsOverlap(getModulePlanBounds(module), featureBounds));
+
+    return touchedModules.map((module) => ({
+      id: `${feature.id}-${module.id}`,
+      feature,
+      module,
+      severity: "error" as const,
+      message: getFeatureBlockMessage(feature, module),
+    }));
+  });
+}
+
+function formatRotation(rotation: ModuleRotation) {
+  return `${rotation} deg`;
+}
+
+function getNextRotation(rotation: ModuleRotation): ModuleRotation {
+  return ((rotation + 90) % 360) as ModuleRotation;
+}
+
+function getDefaultRotation(id: string): ModuleRotation {
+  if (id.startsWith("left")) return 90;
+  if (id.startsWith("right")) return 270;
+  return 0;
+}
+
+function getDefaultBlockPosition(config: DesignConfig, block: ProductBlock): [number, number, number] {
+  const layout = getDefaultBlockLayout(config, [block], {})[block.id];
+  return layout?.position ?? [0, block.height / 2, -config.depth / 2 + block.depth / 2];
+}
+
+function getDefaultBlockLayout(
+  config: DesignConfig,
+  blocks: ProductBlock[],
+  savedRotations: PieceRotations
+): Record<string, { position: [number, number, number]; rotation: ModuleRotation }> {
+  const spacing = 4;
+  const sideWallDepth = blocks.reduce((max, block) => Math.max(max, block.depth), 0);
+  const backWallDepth = blocks.reduce((max, block) => Math.max(max, block.depth), 0);
+  const sideCornerClearance = Math.min(config.depth / 2, backWallDepth + spacing);
+  const backCornerClearance = Math.min(config.width / 4, sideWallDepth + spacing);
+  type WallRun = { wall: "back" | "left" | "right"; length: number; cursor: number; offset: number; rotation: ModuleRotation };
+  const backRun: WallRun = {
+    wall: "back",
+    length: Math.max(18, config.width - backCornerClearance * 2),
+    cursor: 0,
+    offset: backCornerClearance,
+    rotation: 0,
+  };
+  const runs = [backRun];
+
+  if (includesLeft(config.shape)) {
+    runs.push({
+      wall: "left",
+      length: Math.max(18, config.depth - sideCornerClearance),
+      cursor: 0,
+      offset: sideCornerClearance,
+      rotation: 90,
+    });
+  }
+  if (includesRight(config.shape)) {
+    runs.push({
+      wall: "right",
+      length: Math.max(18, config.depth - sideCornerClearance),
+      cursor: 0,
+      offset: sideCornerClearance,
+      rotation: 270,
+    });
+  }
+
+  const layout: Record<string, { position: [number, number, number]; rotation: ModuleRotation }> = {};
+
+  blocks.forEach((block) => {
+    let run = runs.find((candidate) => candidate.cursor + block.width <= candidate.length);
+    if (!run) run = runs.reduce((shortest, candidate) => candidate.cursor < shortest.cursor ? candidate : shortest, runs[0]);
+
+    const rotation = savedRotations[block.id] ?? run.rotation;
+    const along = run.offset + Math.min(run.length - block.width / 2, run.cursor + block.width / 2);
+    const rawPosition: [number, number, number] =
+      run.wall === "back"
+        ? [-config.width / 2 + along, block.height / 2, -config.depth / 2 + block.depth / 2]
+        : run.wall === "left"
+          ? [-config.width / 2 + block.depth / 2, block.height / 2, -config.depth / 2 + along]
+          : [config.width / 2 - block.depth / 2, block.height / 2, -config.depth / 2 + along];
+
+    layout[block.id] = {
+      position: clampModulePosition(config, [block.width, block.height, block.depth], rotation, rawPosition),
+      rotation,
+    };
+    run.cursor += block.width + spacing;
+  });
+
+  return layout;
+}
+
+function buildProductBlockModules(
+  config: DesignConfig,
+  productBlocks: ProductBlock[],
+  positions: ShelfPositions,
+  rotations: PieceRotations
+): PieceModule[] {
+  const defaultLayout = getDefaultBlockLayout(config, productBlocks, rotations);
+
+  return productBlocks.map((block) => {
+    const fallback = defaultLayout[block.id] ?? { position: getDefaultBlockPosition(config, block), rotation: 0 as ModuleRotation };
+    const rotation = rotations[block.id] ?? fallback.rotation;
+    const position = positions[block.id] ?? fallback.position;
+    const dimensions: [number, number, number] = [block.width, block.height, block.depth];
+
+    return {
+      id: block.id,
+      label: block.name,
+      detail: `${block.productLine === "freedomRail" ? "freedomRail" : "Select"} · ${block.finish} · ${block.parts.length} parts`,
+      price: block.price,
+      zone: "Built Block",
+      basePosition: fallback.position,
+      position,
+      dimensions,
+      rotation,
+      panels: resolvePanels(config, { position, dimensions, rotation }),
+      productLine: block.productLine,
+      finish: block.finish,
+      parts: block.parts,
+    };
+  });
+}
+
+function clampModulePosition(
+  config: DesignConfig,
+  dimensions: [number, number, number],
+  rotation: ModuleRotation,
+  position: [number, number, number]
+): [number, number, number] {
+  const { width, depth } = getPlanDimensions(dimensions, rotation);
+  const [, h] = dimensions;
+
+  return [
+    Number(Math.max(-config.width / 2 + width / 2, Math.min(config.width / 2 - width / 2, position[0])).toFixed(1)),
+    Number(Math.max(h / 2, Math.min(config.height - h / 2, position[1])).toFixed(1)),
+    Number(Math.max(-config.depth / 2 + depth / 2, Math.min(config.depth / 2 - depth / 2, position[2])).toFixed(1)),
+  ];
+}
+
+function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, positions: ShelfPositions, rotations: PieceRotations): PieceModule[] {
   const halfW = config.width / 2;
   const halfD = config.depth / 2;
   const zoneW = config.width / 3;
   const bZ = -halfD + config.shelfDepth / 2;
-  const modules: Record<PieceId, Omit<PieceModule, "position">> = {
+  const modules: Record<PieceId, Omit<PieceModule, "position" | "rotation" | "panels">> = {
     "back-left-tower": {
       id: "back-left-tower",
       label: "Tower Shelves",
@@ -384,8 +605,8 @@ function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, po
       label: "Hanging Rod",
       detail: "single hang",
       price: 145,
-      zone: "Left Return",
-      basePosition: [-halfW + config.leftReturn / 2, 42, 0],
+      zone: "Side Modules",
+      basePosition: [-halfW + 1.5, 42, -halfD + config.leftReturn / 2],
       dimensions: [Math.max(8, config.leftReturn - 2), 8, 3],
     },
     "left-shelves": {
@@ -393,8 +614,8 @@ function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, po
       label: "Shelves",
       detail: "3 levels",
       price: 175,
-      zone: "Left Return",
-      basePosition: [-halfW + config.leftReturn / 2, 58, 0],
+      zone: "Side Modules",
+      basePosition: [-halfW + config.shelfDepth / 2, 58, -halfD + config.leftReturn / 2],
       dimensions: [Math.max(8, config.leftReturn - 2), 42, config.shelfDepth],
     },
     "right-double-rod": {
@@ -402,8 +623,8 @@ function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, po
       label: "Double Hang",
       detail: "short x 2",
       price: 215,
-      zone: "Right Return",
-      basePosition: [halfW - config.rightReturn / 2, 52, 0],
+      zone: "Additional Side Modules",
+      basePosition: [halfW - 1.5, 52, -halfD + config.rightReturn / 2],
       dimensions: [Math.max(8, config.rightReturn - 2), 38, 3],
     },
     "right-shelves": {
@@ -411,21 +632,31 @@ function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, po
       label: "Shelves",
       detail: "3 levels",
       price: 175,
-      zone: "Right Return",
-      basePosition: [halfW - config.rightReturn / 2, 57, 0],
+      zone: "Additional Side Modules",
+      basePosition: [halfW - config.shelfDepth / 2, 57, -halfD + config.rightReturn / 2],
       dimensions: [Math.max(8, config.rightReturn - 2), 38, config.shelfDepth],
     },
   };
 
   return getActivePieces(config, enabledPieces).map((piece) => {
     const pieceModule = modules[piece.id];
+    const rotation = rotations[piece.id] ?? getDefaultRotation(piece.id);
+    const position = positions[piece.id] ?? pieceModule.basePosition;
+    const partialModule = {
+      position,
+      dimensions: pieceModule.dimensions,
+      rotation,
+    };
+
     return {
       ...pieceModule,
       label: piece.label,
       detail: piece.detail,
       price: piece.price,
       zone: piece.zone,
-      position: positions[piece.id] ?? pieceModule.basePosition,
+      position,
+      rotation,
+      panels: resolvePanels(config, partialModule),
     };
   });
 }
@@ -434,7 +665,47 @@ function ModuleGeometry({ pieceModule, selected }: { pieceModule: PieceModule; s
   const T = 0.75;
   const [w, h, d] = pieceModule.dimensions;
   const shelfYs = [-h / 2 + 8, -h / 2 + 20, -h / 2 + 32, -h / 2 + 44, h / 2 - 8].filter((y) => y > -h / 2 + 3 && y < h / 2 - 3);
-  const panelColor = selected ? "#ffffff" : "#f6f5f1";
+  const panelColor = pieceModule.productLine === "select" ? (selected ? "#ffffff" : "#eeeae3") : selected ? "#ffffff" : "#f6f5f1";
+
+  if (pieceModule.parts) {
+    return (
+      <>
+        {pieceModule.parts.map((part) => {
+          if (part.type === "rod") {
+            return (
+              <mesh key={part.id} position={[part.x, part.y - h / 2, part.z]} rotation={[0, 0, Math.PI / 2]} castShadow>
+                <cylinderGeometry args={[0.42, 0.42, part.width, 16]} />
+                <meshStandardMaterial color={selected ? "#d8d1c8" : "#4e504d"} roughness={0.22} metalness={0.62} />
+              </mesh>
+            );
+          }
+
+          const color =
+            part.type === "rail" || part.type === "upright"
+              ? "#929a94"
+              : part.type === "drawer"
+                ? "#d8d1c8"
+                : part.type === "panel"
+                  ? panelColor
+                  : "#f3f1ec";
+
+          return (
+            <RoundedBox
+              key={part.id}
+              args={[part.width, part.height, part.depth]}
+              radius={Math.min(0.35, part.width / 16, part.depth / 12)}
+              smoothness={3}
+              position={[part.x, part.y - h / 2, part.z]}
+              castShadow
+              receiveShadow
+            >
+              <meshStandardMaterial color={color} roughness={0.2} metalness={part.type === "rail" || part.type === "upright" ? 0.18 : 0} />
+            </RoundedBox>
+          );
+        })}
+      </>
+    );
+  }
 
   if (pieceModule.id === "center-drawers") {
     return (
@@ -494,6 +765,35 @@ function ModuleGeometry({ pieceModule, selected }: { pieceModule: PieceModule; s
   );
 }
 
+function ResolvedPanelIndicators({ pieceModule }: { pieceModule: PieceModule }) {
+  const [w, h, d] = pieceModule.dimensions;
+  const color = "#86a98f";
+  const opacity = 0.32;
+
+  return (
+    <>
+      {pieceModule.panels.left && (
+        <mesh position={[-w / 2 - 0.18, 0, 0]}>
+          <boxGeometry args={[0.36, h, d]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} />
+        </mesh>
+      )}
+      {pieceModule.panels.right && (
+        <mesh position={[w / 2 + 0.18, 0, 0]}>
+          <boxGeometry args={[0.36, h, d]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} />
+        </mesh>
+      )}
+      {pieceModule.panels.back && (
+        <mesh position={[0, 0, -d / 2 - 0.18]}>
+          <boxGeometry args={[w, h, 0.36]} />
+          <meshBasicMaterial color={color} transparent opacity={opacity} />
+        </mesh>
+      )}
+    </>
+  );
+}
+
 function DraggableModule({
   pieceModule,
   selected,
@@ -506,8 +806,8 @@ function DraggableModule({
   selected: boolean;
   cameraView: CameraView;
   config: DesignConfig;
-  onSelect: (id: PieceId) => void;
-  onMove: (id: PieceId, position: [number, number, number]) => void;
+  onSelect: (id: string) => void;
+  onMove: (id: string, position: [number, number, number]) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const dragRef = useRef<{
@@ -522,6 +822,7 @@ function DraggableModule({
     const point = new THREE.Vector3(...pieceModule.position);
     if (cameraView === "top") return new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), point);
     if (cameraView === "front") return new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1), point);
+    if (pieceModule.parts) return new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), point);
     if (pieceModule.id.startsWith("back") || pieceModule.id.startsWith("center")) return new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1), point);
     return new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(1, 0, 0), point);
   }
@@ -530,16 +831,18 @@ function DraggableModule({
     const clamped = next.clone();
     const base = new THREE.Vector3(...pieceModule.basePosition);
 
-    if (cameraView === "top") clamped.y = pieceModule.position[1];
+    if (pieceModule.parts || cameraView === "top") clamped.y = pieceModule.position[1];
     if (cameraView === "front") clamped.z = pieceModule.position[2];
     if (cameraView === "corner" || cameraView === "detail") {
-      if (pieceModule.id.startsWith("back") || pieceModule.id.startsWith("center")) clamped.z = pieceModule.position[2];
-      if (pieceModule.id.startsWith("left") || pieceModule.id.startsWith("right")) clamped.x = pieceModule.position[0];
+      if (!pieceModule.parts && (pieceModule.id.startsWith("back") || pieceModule.id.startsWith("center"))) clamped.z = pieceModule.position[2];
+      if (!pieceModule.parts && (pieceModule.id.startsWith("left") || pieceModule.id.startsWith("right"))) clamped.x = pieceModule.position[0];
     }
 
-    clamped.x = Math.max(-config.width / 2 + w / 2, Math.min(config.width / 2 - w / 2, clamped.x));
+    const plan = getPlanDimensions(pieceModule.dimensions, pieceModule.rotation);
+
+    clamped.x = Math.max(-config.width / 2 + plan.width / 2, Math.min(config.width / 2 - plan.width / 2, clamped.x));
     clamped.y = Math.max(h / 2, Math.min(config.height - h / 2, clamped.y));
-    clamped.z = Math.max(-config.depth / 2 + d / 2, Math.min(config.depth / 2 - d / 2, clamped.z));
+    clamped.z = Math.max(-config.depth / 2 + plan.depth / 2, Math.min(config.depth / 2 - plan.depth / 2, clamped.z));
 
     const gridMiss = offGridAmount([clamped.x, clamped.y, clamped.z], [base.x, base.y, base.z]);
     if (gridMiss <= 1) {
@@ -585,6 +888,7 @@ function DraggableModule({
   return (
     <group
       position={pieceModule.position}
+      rotation={[0, THREE.MathUtils.degToRad(pieceModule.rotation), 0]}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -609,6 +913,7 @@ function DraggableModule({
         </RoundedBox>
       )}
       <ModuleGeometry pieceModule={pieceModule} selected={selected || hovered} />
+      {selected && <ResolvedPanelIndicators pieceModule={pieceModule} />}
     </group>
   );
 }
@@ -622,11 +927,11 @@ function ConfigurableModules({
   onMove,
 }: {
   modules: PieceModule[];
-  selectedPiece: PieceId | null;
+  selectedPiece: string | null;
   cameraView: CameraView;
   config: DesignConfig;
-  onSelect: (id: PieceId) => void;
-  onMove: (id: PieceId, position: [number, number, number]) => void;
+  onSelect: (id: string) => void;
+  onMove: (id: string, position: [number, number, number]) => void;
 }) {
   return (
     <group>
@@ -658,7 +963,7 @@ function ClosetRoom({
   config: DesignConfig;
   footprint: MeasuredFootprint;
 }) {
-  const forceOpen = mode === "open" || wallVisibility === "open";
+  const forceOpen = wallVisibility === "open";
   const smartCutaway = wallVisibility === "smart" && (cameraView === "front" || cameraView === "detail" || mode === "inspection");
   const smartTransparency = wallVisibility === "smart" && cameraView === "top";
   const hideFrontWallMass = forceOpen || wallVisibility === "smart";
@@ -779,6 +1084,76 @@ function ClosetRoom({
         <shapeGeometry args={[floorShape]} />
         <meshStandardMaterial color="#f5f1ec" opacity={ceilingOpacity} transparent={ceilingOpacity < 1} roughness={0.88} />
       </mesh>
+    </group>
+  );
+}
+
+function RoomFeatures3D({
+  config,
+  features,
+  wallVisibility,
+  blockedFeatureIds,
+}: {
+  config: DesignConfig;
+  features: RoomFeature[];
+  wallVisibility: WallVisibility;
+  blockedFeatureIds: Set<string>;
+}) {
+  if (features.length === 0) return null;
+
+  return (
+    <group>
+      {features.map((feature) => {
+        const position = getFeatureWorldPosition(config, feature);
+        const plan = getFeaturePlanSize(feature);
+        const isColumn = feature.kind === "column";
+        const isRegister = feature.kind === "air-register";
+        const isBlocked = blockedFeatureIds.has(feature.id);
+        if (isColumn && wallVisibility === "open") return null;
+
+        const columnOpacity = wallVisibility === "smart" ? 0.56 : 0.9;
+        const color = isColumn ? "#e7e1db" : isBlocked ? "#b45643" : isRegister ? "#6f9998" : "#a98a6c";
+        const opacity = isColumn ? columnOpacity : isBlocked ? 0.76 : 0.58;
+        const height = Math.max(feature.height, isRegister ? 0.45 : 1);
+        const y = isRegister ? 0.24 : position[1];
+
+        return (
+          <group key={feature.id}>
+            <RoundedBox
+              args={[plan.width, height, plan.depth]}
+              radius={isColumn ? 0.7 : 0.35}
+              smoothness={4}
+              position={[position[0], y, position[2]]}
+              castShadow={isColumn}
+              receiveShadow
+            >
+              <meshStandardMaterial color={color} transparent={opacity < 1} opacity={opacity} roughness={isColumn ? 0.9 : 0.68} metalness={isRegister ? 0.18 : 0} />
+            </RoundedBox>
+            {feature.kind === "access-panel" && (
+              <Line
+                points={[
+                  [position[0] - plan.width / 2, feature.elevation, position[2] - plan.depth / 2],
+                  [position[0] + plan.width / 2, feature.elevation, position[2] - plan.depth / 2],
+                  [position[0] + plan.width / 2, feature.elevation + feature.height, position[2] - plan.depth / 2],
+                  [position[0] - plan.width / 2, feature.elevation + feature.height, position[2] - plan.depth / 2],
+                  [position[0] - plan.width / 2, feature.elevation, position[2] - plan.depth / 2],
+                ]}
+                color={isBlocked ? "#b45643" : "#7f624d"}
+                lineWidth={isBlocked ? 2 : 1.2}
+                transparent
+                opacity={isBlocked ? 1 : 0.78}
+              />
+            )}
+            <Html position={[position[0], isRegister ? 3 : Math.min(config.height - 4, feature.elevation + height + 4), position[2]]} center distanceFactor={22}>
+              <div className={`whitespace-nowrap rounded-md border px-2.5 py-1.5 text-[10px] font-semibold shadow-md backdrop-blur-md ${
+                isBlocked ? "border-[#dec8c0] bg-[#fbf2ef]/92 text-[#7e4e40]" : "border-white/70 bg-white/86 text-[#25302c]"
+              }`}>
+                {feature.label}{isBlocked ? " blocked" : ""}
+              </div>
+            </Html>
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -968,6 +1343,45 @@ function MeasurementLine({
   );
 }
 
+function SelectedModuleMeasurements({ module }: { module: PieceModule }) {
+  const [w, h, d] = module.dimensions;
+  const bottom = -h / 2;
+  const top = h / 2;
+  const back = -d / 2;
+  const front = d / 2;
+  const lineColor = "#48645a";
+
+  return (
+    <group position={module.position} rotation={[0, THREE.MathUtils.degToRad(module.rotation), 0]}>
+      <MeasurementLine
+        start={[-w / 2, top + 5, front + 4]}
+        end={[w / 2, top + 5, front + 4]}
+        label={`${Math.round(w)} in wide`}
+        color={lineColor}
+      />
+      <MeasurementLine
+        start={[w / 2 + 5, bottom, front + 2]}
+        end={[w / 2 + 5, top, front + 2]}
+        label={`${Math.round(h)} in tall`}
+        color={lineColor}
+        labelOffset={[5, 0, 0]}
+      />
+      <MeasurementLine
+        start={[-w / 2 - 5, top + 2, back]}
+        end={[-w / 2 - 5, top + 2, front]}
+        label={`${Math.round(d)} in deep`}
+        color={lineColor}
+        labelOffset={[-5, 0, 0]}
+      />
+      <Html position={[0, top + 12, front + 6]} center distanceFactor={20}>
+        <div className="whitespace-nowrap rounded-md border border-[#cbd6ce] bg-white/92 px-3 py-2 text-[11px] font-semibold text-[#25302c] shadow-lg backdrop-blur-md">
+          {module.label}: {Math.round(w)} x {Math.round(h)} x {Math.round(d)} in · {getPanelCount(module.panels)} finish panels
+        </div>
+      </Html>
+    </group>
+  );
+}
+
 function ValidationBadge({ shelf, visible }: { shelf: ShelfComponent; visible: boolean }) {
   if (!visible) return null;
 
@@ -991,6 +1405,7 @@ function ValidationBadge({ shelf, visible }: { shelf: ShelfComponent; visible: b
 function ShelfSystem({
   mode,
   cameraView,
+  selectedModule,
   selectedShelf,
   showMeasurements,
   onSelectShelf,
@@ -1000,6 +1415,7 @@ function ShelfSystem({
 }: {
   mode: ViewMode;
   cameraView: CameraView;
+  selectedModule: PieceModule | null;
   selectedShelf: string | null;
   showMeasurements: boolean;
   onSelectShelf: (id: string | null) => void;
@@ -1008,8 +1424,7 @@ function ShelfSystem({
   shelves: ShelfComponent[];
 }) {
   const selected = shelves.find((shelf) => shelf.id === selectedShelf);
-  const showDetail = showMeasurements && mode !== "open";
-  const showEssential = showMeasurements && mode === "open";
+  const showDetail = showMeasurements;
   const backShelfWidth = config.width - 4;
   const clearance = Math.round(config.height - config.shelfHeight - SHELF_THICKNESS);
 
@@ -1034,7 +1449,7 @@ function ShelfSystem({
         />
       ))}
 
-      {(showDetail || showEssential) && (
+      {showDetail && (
         <>
           <MeasurementLine
             start={[-config.width / 2 - 7, 0, -config.depth / 2 - 3]}
@@ -1072,22 +1487,6 @@ function ShelfSystem({
             color={clearance < 18 ? "#a0866c" : "#8c9994"}
             labelOffset={[0, 0, 5]}
           />
-          {includesLeft(config.shape) && (
-            <MeasurementLine
-              start={[-config.width / 2, config.shelfHeight + 7, 1.5]}
-              end={[-config.width / 2 + config.leftReturn, config.shelfHeight + 7, 1.5]}
-              label={`${config.leftReturn} in left return`}
-              color="#48544f"
-            />
-          )}
-          {includesRight(config.shape) && (
-            <MeasurementLine
-              start={[config.width / 2 - config.rightReturn + config.rightOffset, config.shelfHeight + 7, 1.5]}
-              end={[config.width / 2 + config.rightOffset, config.shelfHeight + 7, 1.5]}
-              label={`${config.rightReturn} in right return`}
-              color={config.rightOffset === 0 ? "#48544f" : "#a06858"}
-            />
-          )}
           <MeasurementLine
             start={[config.width / 2 + 7, config.shelfHeight - SHELF_THICKNESS / 2, 0]}
             end={[config.width / 2 + 7, config.shelfHeight + SHELF_THICKNESS / 2, 0]}
@@ -1097,6 +1496,8 @@ function ShelfSystem({
           />
         </>
       )}
+
+      {showMeasurements && selectedModule && <SelectedModuleMeasurements module={selectedModule} />}
 
       {mode === "inspection" && selected && (
         <Html position={[0, Math.max(36, config.shelfHeight - 28), 18]} center distanceFactor={20}>
@@ -1142,8 +1543,6 @@ function CameraRig({
       target.set(0, config.shelfHeight, -2);
     } else if (cameraView === "detail" || mode === "inspection") {
       destination.set(focusX + 42, focusY + 5, focusZ + 58);
-    } else if (mode === "open") {
-      destination.set(config.width * 0.78, config.height * 0.62, config.depth + 82);
     } else {
       destination.set(config.width * 0.76, config.height * 0.52, config.depth + 68);
     }
@@ -1189,32 +1588,6 @@ function Lights() {
   );
 }
 
-function ModeButton({
-  mode,
-  current,
-  children,
-  onClick,
-}: {
-  mode: ViewMode;
-  current: ViewMode;
-  children: ReactNode;
-  onClick: (mode: ViewMode) => void;
-}) {
-  const active = mode === current;
-
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(mode)}
-      className={`rounded-md px-3 py-2 text-sm font-semibold transition ${
-        active ? "bg-[#25302c] text-white shadow-sm" : "text-[#33413c] hover:bg-white"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function ChoiceButton({
   active,
   children,
@@ -1250,9 +1623,10 @@ function allocatePrices(count: number, total: number) {
   return prices;
 }
 
-function buildPersistenceComponents(config: DesignConfig, modules: PieceModule[], enabledPieces: Set<PieceId>): ClosetComponent[] {
+function buildPersistenceComponents(config: DesignConfig, modules: PieceModule[], totalPrice: number): ClosetComponent[] {
   const components: Omit<ClosetComponent, "priceEach">[] = modules.map((pieceModule) => {
-    const [w, h] = pieceModule.dimensions;
+    const [, h] = pieceModule.dimensions;
+    const plan = getPlanDimensions(pieceModule.dimensions, pieceModule.rotation);
     const type: ClosetComponent["type"] =
       pieceModule.id === "center-drawers"
         ? "drawer-unit"
@@ -1263,10 +1637,10 @@ function buildPersistenceComponents(config: DesignConfig, modules: PieceModule[]
     return {
       id: `3d-${pieceModule.id}`,
       type,
-      label: `${pieceModule.zone}: ${pieceModule.label}`,
-      x: Math.round(pieceModule.position[0] + config.width / 2 - w / 2),
+      label: `${pieceModule.zone}: ${pieceModule.label} · ${formatRotation(pieceModule.rotation)} · ${getPanelCount(pieceModule.panels)} finish panels`,
+      x: Math.round(pieceModule.position[0] + config.width / 2 - plan.width / 2),
       y: Math.round(config.height - pieceModule.position[1] - h / 2),
-      w: Math.round(w),
+      w: Math.round(plan.width),
       h: Math.round(h),
       color: type === "hanging-rod" ? "#cac4be" : "#f6f5f1",
     };
@@ -1283,7 +1657,7 @@ function buildPersistenceComponents(config: DesignConfig, modules: PieceModule[]
     color: "#ede8e2",
   });
 
-  const prices = allocatePrices(components.length, getSystemPrice(config, enabledPieces));
+  const prices = allocatePrices(components.length, totalPrice);
 
   return components.map((component, index) => ({
     ...component,
@@ -1300,17 +1674,30 @@ export default function ClosetExperience3D() {
     setEnabledPieceIds,
     shelfPositions,
     setShelfPositions,
+    pieceRotations,
+    setPieceRotations,
+    productBlocks,
+    blockPositions,
+    setBlockPositions,
+    blockRotations,
+    setBlockRotations,
+    roomFeatures,
   } = useDesignStore();
   const [mode, setMode] = useState<ViewMode>("closet");
   const [cameraView, setCameraView] = useState<CameraView>("corner");
-  const [selectedPiece, setSelectedPiece] = useState<PieceId | null>(null);
+  const [selectedPiece, setSelectedPiece] = useState<string | null>(null);
   const [showMeasurements, setShowMeasurements] = useState(false);
   const [zoom, setZoom] = useState(1.0);
   const [wallVisibility, setWallVisibility] = useState<WallVisibility>("smart");
 
   const enabledPieces = useMemo(() => new Set(enabledPieceIds.filter(isPieceId)), [enabledPieceIds]);
   const shelves = useMemo(() => buildShelves(config, shelfPositions), [config, shelfPositions]);
-  const modules = useMemo(() => buildPieceModules(config, enabledPieces, shelfPositions), [config, enabledPieces, shelfPositions]);
+  const modules = useMemo(
+    () => productBlocks.length > 0
+      ? buildProductBlockModules(config, productBlocks, blockPositions, blockRotations)
+      : buildPieceModules(config, enabledPieces, shelfPositions, pieceRotations),
+    [blockPositions, blockRotations, config, enabledPieces, pieceRotations, productBlocks, shelfPositions]
+  );
   const effectiveSelectedPiece = modules.some((pieceModule) => pieceModule.id === selectedPiece) ? selectedPiece : modules[0]?.id ?? null;
   const selectedModule = modules.find((pieceModule) => pieceModule.id === effectiveSelectedPiece) ?? null;
   const clearance = Math.round(config.height - config.shelfHeight - SHELF_THICKNESS);
@@ -1318,11 +1705,34 @@ export default function ClosetExperience3D() {
   const maxZoom = cameraView === "top" ? 1.38 : cameraView === "front" ? 1.08 : cameraView === "detail" ? 2.05 : 1.24;
   const effectiveZoom = Math.max(minZoom, Math.min(maxZoom, zoom));
   const activePieces = useMemo(() => getActivePieces(config, enabledPieces), [config, enabledPieces]);
-  const visibleGroups = useMemo(() => getVisiblePieceGroups(config), [config]);
-  const componentsSubtotal = useMemo(() => getComponentsSubtotal(config, enabledPieces), [config, enabledPieces]);
+  const visibleGroups = useMemo(() => getVisiblePieceGroups(), []);
+  const componentsSubtotal = useMemo(
+    () => productBlocks.length > 0 ? productBlocks.reduce((sum, block) => sum + block.price, 0) : getComponentsSubtotal(config, enabledPieces),
+    [config, enabledPieces, productBlocks]
+  );
   const allowances = useMemo(() => getProjectAllowances(config), [config]);
-  const systemPrice = useMemo(() => getSystemPrice(config, enabledPieces), [config, enabledPieces]);
+  const systemPrice = useMemo(
+    () => productBlocks.length > 0 ? Math.round((componentsSubtotal + allowances.materialAllowance + allowances.installAllowance) / 50) * 50 : getSystemPrice(config, enabledPieces),
+    [allowances.installAllowance, allowances.materialAllowance, componentsSubtotal, config, enabledPieces, productBlocks.length]
+  );
   const storageStats = useMemo(() => getStorageStats(config, enabledPieces, shelves), [config, enabledPieces, shelves]);
+  const materialLines = useMemo(() => buildMaterialList(productBlocks, config), [config, productBlocks]);
+  const materialSubtotal = useMemo(
+    () => materialLines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0),
+    [materialLines]
+  );
+  const featurePlacementNotes = useMemo(
+    () => getFeaturePlacementNotes(config, modules, roomFeatures),
+    [config, modules, roomFeatures]
+  );
+  const selectedFeatureNotes = useMemo(
+    () => selectedModule ? featurePlacementNotes.filter((note) => note.module.id === selectedModule.id) : [],
+    [featurePlacementNotes, selectedModule]
+  );
+  const blockedFeatureIds = useMemo(
+    () => new Set(featurePlacementNotes.map((note) => note.feature.id)),
+    [featurePlacementNotes]
+  );
 
   useEffect(() => {
     syncCurrentDesign({
@@ -1330,13 +1740,18 @@ export default function ClosetExperience3D() {
         width: config.width,
         height: config.height,
       },
-      components: buildPersistenceComponents(config, modules, enabledPieces),
+      components: buildPersistenceComponents(config, modules, systemPrice),
       closetConfig: config,
       closetFootprint,
       enabledPieceIds: Array.from(enabledPieces),
       shelfPositions,
+      pieceRotations,
+      productBlocks,
+      blockPositions,
+      blockRotations,
+      roomFeatures,
     });
-  }, [closetFootprint, config, enabledPieces, modules, shelfPositions, syncCurrentDesign]);
+  }, [blockPositions, blockRotations, closetFootprint, config, enabledPieces, modules, pieceRotations, productBlocks, roomFeatures, shelfPositions, syncCurrentDesign, systemPrice]);
 
   function togglePiece(id: PieceId) {
     const next = new Set(enabledPieces);
@@ -1346,11 +1761,37 @@ export default function ClosetExperience3D() {
     if (selectedPiece === id) setSelectedPiece(null);
   }
 
-  function handleMovePiece(id: PieceId, position: [number, number, number]) {
-    setShelfPositions({
-      ...shelfPositions,
-      [id]: position,
-    });
+  function handleMovePiece(id: string, position: [number, number, number]) {
+    if (productBlocks.some((block) => block.id === id)) {
+      setBlockPositions({
+        ...blockPositions,
+        [id]: position,
+      });
+      return;
+    }
+
+    setShelfPositions({ ...shelfPositions, [id]: position });
+  }
+
+  function handleRotatePiece(id: string) {
+    const pieceModule = modules.find((module) => module.id === id);
+    if (!pieceModule) return;
+
+    const nextRotation = getNextRotation(pieceModule.rotation);
+    if (productBlocks.some((block) => block.id === id)) {
+      setBlockRotations({ ...blockRotations, [id]: nextRotation });
+      setBlockPositions({ ...blockPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position) });
+    } else {
+      setPieceRotations({ ...pieceRotations, [id]: nextRotation });
+      setShelfPositions({ ...shelfPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position) });
+    }
+    setSelectedPiece(id);
+    setMode("inspection");
+  }
+
+  function handleCameraViewChange(view: CameraView) {
+    setCameraView(view);
+    setMode(view === "detail" ? "inspection" : "closet");
   }
 
   return (
@@ -1362,22 +1803,11 @@ export default function ClosetExperience3D() {
           </div>
           <h1 className="text-xl font-semibold leading-tight text-[#1f2824] md:text-2xl">Editable closet system</h1>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-[#53635d]">
-            Guided camera moves replace free spinning. Desktop uses Open Room view; true AR can stay mobile-first later.
+            Guided views keep the closet easy to review without free spinning.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-[#d8dfd8] bg-[#eef3ee] p-1">
-            <ModeButton mode="closet" current={mode} onClick={setMode}>
-              Closet
-            </ModeButton>
-            <ModeButton mode="open" current={mode} onClick={setMode}>
-              Open Room
-            </ModeButton>
-            <ModeButton mode="inspection" current={mode} onClick={setMode}>
-              Inspect
-            </ModeButton>
-          </div>
           <button
             type="button"
             onClick={() => setShowMeasurements((value) => !value)}
@@ -1397,7 +1827,7 @@ export default function ClosetExperience3D() {
             <FloorShadow cameraView={cameraView} />
             <CameraRig mode={mode} cameraView={cameraView} focusPosition={selectedModule?.position ?? null} config={config} zoom={effectiveZoom} />
             <ClosetRoom mode={mode} cameraView={cameraView} wallVisibility={wallVisibility} config={config} footprint={closetFootprint} />
-            <ClosetBuiltIn config={config} />
+            <RoomFeatures3D config={config} features={roomFeatures} wallVisibility={wallVisibility} blockedFeatureIds={blockedFeatureIds} />
             <ConfigurableModules
               modules={modules}
               selectedPiece={effectiveSelectedPiece}
@@ -1405,7 +1835,7 @@ export default function ClosetExperience3D() {
               config={config}
               onSelect={(id) => {
                 setSelectedPiece(id);
-                if (mode === "inspection") setCameraView("detail");
+                setMode("inspection");
               }}
               onMove={handleMovePiece}
             />
@@ -1413,6 +1843,7 @@ export default function ClosetExperience3D() {
               <ShelfSystem
                 mode={mode}
                 cameraView={cameraView}
+                selectedModule={selectedModule}
                 selectedShelf={null}
                 showMeasurements={showMeasurements}
                 onSelectShelf={() => undefined}
@@ -1436,11 +1867,20 @@ export default function ClosetExperience3D() {
           <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap gap-2">
               {(["corner", "front", "top", "detail"] as CameraView[]).map((view) => (
-                <ChoiceButton key={view} active={cameraView === view} onClick={() => setCameraView(view)}>
+                <ChoiceButton key={view} active={cameraView === view} onClick={() => handleCameraViewChange(view)}>
                   {view === "corner" ? "Corner" : view === "front" ? "Front" : view === "top" ? "Top" : "Detail"}
                 </ChoiceButton>
               ))}
             </div>
+            {selectedModule && (
+              <button
+                type="button"
+                onClick={() => handleRotatePiece(selectedModule.id)}
+                className="rounded-md border border-[#cbd6ce] bg-white px-3 py-2 text-sm font-semibold text-[#33413c] transition hover:bg-[#eef3ee]"
+              >
+                Rotate Selected
+              </button>
+            )}
             <div className="flex flex-wrap gap-2">
               {(["full", "smart", "open"] as WallVisibility[]).map((visibility) => (
                 <ChoiceButton key={visibility} active={wallVisibility === visibility} onClick={() => setWallVisibility(visibility)}>
@@ -1465,15 +1905,15 @@ export default function ClosetExperience3D() {
 
         <aside className="w-full overflow-y-auto border-t border-[#d8dfd8] bg-white p-5 xl:border-l xl:border-t-0">
 
-          {/* ── Back to plan ── */}
+          {/* ── Back to block builder ── */}
           <Link
-            href="/"
+            href="/blocks"
             className="mb-5 flex items-center gap-1.5 text-xs font-semibold text-[#48645a] hover:text-[#25302c]"
           >
             <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5" aria-hidden>
               <path d="M13 8H3M7 4l-4 4 4 4" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Edit floor plan
+            Edit building blocks
           </Link>
 
           {/* ── Closet summary ── */}
@@ -1481,7 +1921,10 @@ export default function ClosetExperience3D() {
             <span className="font-semibold text-[#1f2824]">
               {config.shape === "walk-in" ? "Walk-in" : config.shape === "u" ? "U-Shape" : config.shape === "left" ? "Left L" : config.shape === "right" ? "Right L" : "Straight"}
             </span>
-            {" · "}{config.width}&quot; wide · {config.depth}&quot; deep · {config.height}&quot; tall
+            {" room · "}{config.width}&quot; wide · {config.depth}&quot; deep · {config.height}&quot; tall
+            {roomFeatures.length > 0 && (
+              <span>{" · "}{roomFeatures.length} room feature{roomFeatures.length === 1 ? "" : "s"}</span>
+            )}
           </div>
 
           <div className="mb-5 rounded-md border border-[#d8dfd8] bg-white p-4">
@@ -1491,7 +1934,7 @@ export default function ClosetExperience3D() {
                 <div className="mt-1 text-2xl font-semibold tracking-tight text-[#1f2824]">{formatCurrency(systemPrice)}</div>
               </div>
               <div className="rounded-md bg-[#f0f4f0] px-2 py-1 text-[10px] font-semibold text-[#53635d]">
-                {activePieces.length} active pieces
+                {productBlocks.length > 0 ? `${productBlocks.length} blocks` : `${activePieces.length} active pieces`}
               </div>
             </div>
             <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
@@ -1510,86 +1953,40 @@ export default function ClosetExperience3D() {
             </dl>
           </div>
 
-          {/* ── Component list ── */}
           <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[#1f2824]">In this closet</h2>
-            <button
-              type="button"
-              onClick={() => setEnabledPieceIds(Array.from(DEFAULT_PIECES))}
-              className="text-[10px] font-semibold text-[#48645a] hover:text-[#25302c]"
-            >
-              Restore all
-            </button>
+            <h2 className="text-sm font-semibold text-[#1f2824]">Built product blocks</h2>
+            <Link href="/blocks" className="text-[10px] font-semibold text-[#48645a] hover:text-[#25302c]">
+              Edit blocks
+            </Link>
           </div>
 
           <div className="space-y-3">
-            {visibleGroups.map((group) => (
+            {productBlocks.length > 0 ? productBlocks.map((block) => (
+              <div key={block.id} className="rounded-md border border-[#e4ece4] bg-[#f9fbf9] p-3">
+                <div className="text-xs font-semibold text-[#25302c]">{block.name}</div>
+                <div className="mt-1 text-[10px] text-[#6f7d76]">
+                  {block.productLine === "freedomRail" ? "freedomRail" : "Select"} · {block.finish} · {block.width}&quot; wide
+                </div>
+              </div>
+            )) : visibleGroups.map((group) => (
               <div key={group.zone} className="rounded-md border border-[#e4ece4] bg-[#f9fbf9] p-3">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">{group.zone}</div>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">{group.zone}</div>
+                  <button type="button" onClick={() => setEnabledPieceIds(Array.from(DEFAULT_PIECES))} className="text-[10px] font-semibold text-[#48645a] hover:text-[#25302c]">Add all</button>
+                </div>
                 <div className="space-y-1.5">
                   {group.pieces.map((piece) => {
                     const on = enabledPieces.has(piece.id);
-                    const selected = effectiveSelectedPiece === piece.id;
-                    const inspecting = selected && mode === "inspection";
                     return (
-                      <div
+                      <button
                         key={piece.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                          if (!on) return;
-                          setSelectedPiece(piece.id);
-                          setMode("inspection");
-                          setCameraView("detail");
-                        }}
-                        onKeyDown={(event) => {
-                          if (!on || (event.key !== "Enter" && event.key !== " ")) return;
-                          event.preventDefault();
-                          setSelectedPiece(piece.id);
-                          setMode("inspection");
-                          setCameraView("detail");
-                        }}
-                        className={`flex items-center gap-2 rounded border px-2 py-1.5 text-left transition ${
-                          inspecting
-                            ? "border-[#25302c] bg-[#e9f0ea] shadow-[inset_3px_0_0_#25302c]"
-                            : selected
-                              ? "border-[#25302c] bg-[#f6f8f5]"
-                            : on
-                              ? "border-transparent bg-white hover:border-[#d8dfd8]"
-                              : "border-transparent opacity-40"
-                        }`}
+                        type="button"
+                        onClick={() => togglePiece(piece.id)}
+                        className="flex w-full items-center justify-between rounded border border-transparent bg-white px-2 py-1.5 text-left text-xs text-[#25302c] transition hover:border-[#d8dfd8]"
                       >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-xs font-semibold text-[#25302c]">{piece.label}</span>
-                            {inspecting && (
-                              <span className="rounded bg-[#25302c] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
-                                Inspecting
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-[#6f7d76]">{piece.detail}</div>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-xs font-semibold text-[#25302c]">{formatCurrency(piece.price)}</div>
-                          <div className="text-[10px] text-[#6f7d76]">qty {piece.qty}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            togglePiece(piece.id);
-                          }}
-                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border text-xs transition ${
-                            on
-                              ? "border-[#d8dfd8] bg-white text-[#a06858] hover:bg-[#fdf5f3]"
-                              : "border-[#a0c0a8] bg-[#eef5ef] text-[#48645a] hover:bg-[#ddeede]"
-                          }`}
-                          title={on ? "Remove" : "Restore"}
-                        >
-                          {on ? "x" : "+"}
-                        </button>
-                      </div>
+                        <span>{piece.label}</span>
+                        <span className="text-[#6f7d76]">{on ? "active" : "add"}</span>
+                      </button>
                     );
                   })}
                 </div>
@@ -1601,6 +1998,39 @@ export default function ClosetExperience3D() {
             <span className="text-xs font-semibold text-[#53635d]">Components subtotal</span>
             <span className="text-sm font-bold text-[#1f2824]">{formatCurrency(componentsSubtotal)}</span>
           </div>
+
+          {materialLines.length > 0 && (
+            <div className="mt-5 rounded-md border border-[#d8dfd8] bg-[#fbfcfb] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-[#25302c]">Mock materials</h3>
+                  <p className="mt-1 text-xs leading-5 text-[#6f7d76]">Manufactured parts plus install hardware.</p>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Takeoff</div>
+                  <div className="text-sm font-bold text-[#1f2824]">{formatCurrency(materialSubtotal)}</div>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1.5">
+                {materialLines.slice(0, 6).map((line) => (
+                  <div key={line.id} className="flex items-start justify-between gap-3 text-xs">
+                    <div>
+                      <div className="font-semibold text-[#25302c]">{line.name}</div>
+                      <div className="text-[10px] text-[#7a8a82]">{line.sku}</div>
+                    </div>
+                    <div className="shrink-0 text-right font-semibold text-[#53635d]">
+                      {line.qty} {line.unit}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {materialLines.length > 6 && (
+                <div className="mt-2 text-[10px] text-[#7a8a82]">
+                  + {materialLines.length - 6} more hardware/material line{materialLines.length - 6 === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-5 rounded-md border border-[#d8dfd8] bg-[#fbfcfb] p-4">
             <h3 className="text-sm font-semibold text-[#25302c]">Storage intelligence</h3>
@@ -1623,16 +2053,34 @@ export default function ClosetExperience3D() {
               </div>
             </dl>
             <div className="mt-3 rounded-md bg-[#f4f6f4] px-3 py-2 text-xs leading-5 text-[#53635d]">
-              {storageStats.warnings > 0
+              {featurePlacementNotes.length > 0
+                ? `${featurePlacementNotes.length} blocked room feature${featurePlacementNotes.length === 1 ? "" : "s"} must be cleared before proposal.`
+                : storageStats.warnings > 0
                 ? `${storageStats.warnings} placement note${storageStats.warnings === 1 ? "" : "s"} need review before proposal.`
                 : "No placement conflicts detected in this mock validation pass."}
             </div>
+            {featurePlacementNotes.length > 0 && (
+              <div className="mt-2 space-y-1.5">
+                {featurePlacementNotes.slice(0, 3).map((note) => (
+                  <div
+                    key={note.id}
+                    className={`rounded-md border px-2.5 py-2 text-[11px] leading-4 ${
+                      note.severity === "error"
+                        ? "border-[#dec8c0] bg-[#fbf2ef] text-[#7e4e40]"
+                        : "border-[#d9d0bd] bg-[#fbf8ef] text-[#6c5c43]"
+                    }`}
+                  >
+                    {note.message}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mt-6">
             <h2 className="text-base font-semibold text-[#1f2824]">Module placement</h2>
             <p className="mt-1 text-sm leading-6 text-[#5b6a64]">
-              Drag the same priced modules you remove or restore above. Detail view keeps wall context out of the way.
+              Drag and rotate locked product blocks. The app resolves exposed panels from the room walls.
             </p>
           </div>
 
@@ -1641,25 +2089,50 @@ export default function ClosetExperience3D() {
               const active = effectiveSelectedPiece === pieceModule.id;
               const gridMiss = offGridAmount(pieceModule.position, pieceModule.basePosition);
               const moved = pieceModule.position.some((value, index) => Math.abs(value - pieceModule.basePosition[index]) > 0.5);
+              const panelCount = getPanelCount(pieceModule.panels);
+              const panelSummary = panelCount === 0 ? "All construction edges are wall-covered" : `${panelCount} finished panel${panelCount === 1 ? "" : "s"} needed`;
 
               return (
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   key={pieceModule.id}
                   onClick={() => {
                     setSelectedPiece(pieceModule.id);
                     setMode("inspection");
-                    setCameraView("detail");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setSelectedPiece(pieceModule.id);
+                    setMode("inspection");
                   }}
                   className={`w-full rounded-md border p-4 text-left transition ${
                     active ? "border-[#25302c] bg-[#f6f8f5]" : "border-[#d8dfd8] bg-white hover:bg-[#f6f8f5]"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-semibold text-[#25302c]">{pieceModule.label}</span>
-                    <span className="rounded-md bg-[#f0f4f0] px-2 py-1 text-[11px] font-semibold text-[#53635d]">
-                      {formatCurrency(pieceModule.price)}
-                    </span>
+                    <div>
+                      <span className="font-semibold text-[#25302c]">{pieceModule.label}</span>
+                      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">
+                        Rotation {formatRotation(pieceModule.rotation)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-md bg-[#f0f4f0] px-2 py-1 text-[11px] font-semibold text-[#53635d]">
+                        {formatCurrency(pieceModule.price)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleRotatePiece(pieceModule.id);
+                        }}
+                        className="rounded-md border border-[#cbd6ce] bg-white px-2 py-1 text-[11px] font-semibold text-[#33413c] transition hover:bg-[#eef3ee]"
+                      >
+                        Rotate
+                      </button>
+                    </div>
                   </div>
                   <p className="mt-2 text-sm text-[#53635d]">{pieceModule.zone} · {pieceModule.detail}</p>
                   <p className="mt-1 text-xs text-[#6f7d76]">
@@ -1667,7 +2140,27 @@ export default function ClosetExperience3D() {
                       ? `Moved to ${Math.round(pieceModule.position[0])}, ${Math.round(pieceModule.position[1])}, ${Math.round(pieceModule.position[2])} in${gridMiss > 1 ? ` · ${gridMiss} in off grid` : ""}`
                       : "At recommended location"}
                   </p>
-                </button>
+                  <p className="mt-2 text-xs font-semibold text-[#48645a]">{panelSummary}</p>
+                  {active && selectedFeatureNotes.length > 0 && (
+                    <div className="mt-2 rounded-md border border-[#dec8c0] bg-[#fbf2ef] px-2.5 py-2 text-[11px] leading-4 text-[#7e4e40]">
+                      {selectedFeatureNotes[0].message}
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                    {(["left", "right", "back"] as const).map((face) => (
+                      <span
+                        key={face}
+                        className={`rounded border px-1.5 py-0.5 ${
+                          pieceModule.panels[face]
+                            ? "border-[#a0c0a8] bg-[#eef5ef] text-[#48645a]"
+                            : "border-[#d8dfd8] bg-white text-[#7a8a82]"
+                        }`}
+                      >
+                        {face} {pieceModule.panels[face] ? "panel" : pieceModule.panels.coveredBy[face] ?? "covered"}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               );
             })}
           </div>

@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
-import type { MeasuredFootprint } from "@/types";
+import type { MeasuredFootprint, RoomFeature } from "@/types";
 
 const I = 3.0;      // SVG units per inch
 const WALL = 14;    // wall thickness in SVG units
@@ -12,14 +12,35 @@ const DIM_COLOR = "#6b6058";
 const DIM_TICK = 5;
 const HANDLE_R = 8;
 
-type Handle = "width" | "depth" | "leftZone" | "rightZone" | "frontLeftStub" | "frontRightStub";
-const HORIZ_HANDLES: Handle[] = ["width", "leftZone", "rightZone", "frontLeftStub", "frontRightStub"];
+type Handle = "width" | "depth" | "frontLeftStub" | "frontRightStub";
+const HORIZ_HANDLES: Handle[] = ["width", "frontLeftStub", "frontRightStub"];
+
+interface ActiveDrag {
+  id: Handle;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startDepth: number;
+}
+
+interface ActiveFeatureDrag {
+  id: string;
+  startX: number;
+  startY: number;
+  startFeatureX: number;
+  startFeatureY: number;
+}
 
 function snapTo(v: number, step: number) { return Math.round(v / step) * step; }
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
 function hasLeft(s: ClosetShape) { return s === "left" || s === "u" || s === "walk-in"; }
 function hasRight(s: ClosetShape) { return s === "right" || s === "u" || s === "walk-in"; }
 function hasFrontStubs(s: ClosetShape) { return s === "walk-in"; }
+function featurePlanSize(feature: RoomFeature) {
+  return (feature.rotation ?? 0) === 90
+    ? { width: feature.depth, depth: feature.width }
+    : { width: feature.width, depth: feature.depth };
+}
 
 function HDim({ x1, x2, y, label }: { x1: number; x2: number; y: number; label: string }) {
   const mx = (x1 + x2) / 2;
@@ -116,14 +137,17 @@ function DragHandle({
 interface Props {
   config: ClosetConfig;
   footprint: MeasuredFootprint;
+  roomFeatures: RoomFeature[];
   onChange: (u: Partial<ClosetConfig>) => void;
   onFootprintChange: (footprint: MeasuredFootprint) => void;
+  onRoomFeaturesChange: (features: RoomFeature[]) => void;
 }
 
-export default function ClosetFloorPlan({ config, footprint, onChange, onFootprintChange }: Props) {
+export default function ClosetFloorPlan({ config, footprint, roomFeatures, onChange, onFootprintChange, onRoomFeaturesChange }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [drag, setDrag] = useState<Handle | null>(null);
+  const [drag, setDrag] = useState<ActiveDrag | null>(null);
   const [pointDrag, setPointDrag] = useState<string | null>(null);
+  const [featureDrag, setFeatureDrag] = useState<ActiveFeatureDrag | null>(null);
   const [hover, setHover] = useState<Handle | null>(null);
 
   const hl = hasLeft(config.shape);
@@ -157,6 +181,19 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     const x = toSvgX(e.clientX);
     const y = toSvgY(e.clientY);
+    if (featureDrag) {
+      onRoomFeaturesChange(roomFeatures.map((feature) =>
+        feature.id === featureDrag.id
+          ? {
+              ...feature,
+              x: clamp(snapTo(featureDrag.startFeatureX + (x - featureDrag.startX) / I, 3), 0, config.width - featurePlanSize(feature).width),
+              y: clamp(snapTo(featureDrag.startFeatureY + (y - featureDrag.startY) / I, 3), 0, config.depth - featurePlanSize(feature).depth),
+            }
+          : feature
+      ));
+      return;
+    }
+
     if (pointDrag) {
       const nextPoints = footprint.points.map((point) =>
         point.id === pointDrag
@@ -186,17 +223,13 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
     }
 
     if (!drag) return;
-    if (drag === "width") {
-      onChange({ width: clamp(snapTo((x - ix) / I, 6), 60, 240) });
-    } else if (drag === "depth") {
-      onChange({ depth: clamp(snapTo((y - iy) / I, 6), 20, 180) });
-    } else if (drag === "leftZone") {
-      onChange({ leftReturn: clamp(snapTo((x - ix) / I, 6), 24, config.width / 2 - 12) });
-    } else if (drag === "rightZone") {
-      onChange({ rightReturn: clamp(snapTo((rx - x) / I, 6), 24, config.width / 2 - 12) });
-    } else if (drag === "frontLeftStub") {
+    if (drag.id === "width") {
+      onChange({ width: clamp(snapTo(drag.startWidth + (x - drag.startX) / I, 6), 60, 240) });
+    } else if (drag.id === "depth") {
+      onChange({ depth: clamp(snapTo(drag.startDepth - (y - drag.startY) / I, 6), 20, 180) });
+    } else if (drag.id === "frontLeftStub") {
       onChange({ frontStubDepth: clamp(snapTo((x - ix) / I, 6), 12, config.width / 2 - 24) });
-    } else if (drag === "frontRightStub") {
+    } else if (drag.id === "frontRightStub") {
       onChange({ frontStubDepth: clamp(snapTo((rx - x) / I, 6), 12, config.width / 2 - 24) });
     }
   }
@@ -204,7 +237,13 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
   function startDrag(e: React.PointerEvent<SVGCircleElement>, h: Handle) {
     e.stopPropagation();
     (e.target as Element).setPointerCapture(e.pointerId);
-    setDrag(h);
+    setDrag({
+      id: h,
+      startX: toSvgX(e.clientX),
+      startY: toSvgY(e.clientY),
+      startWidth: config.width,
+      startDepth: config.depth,
+    });
   }
 
   function startPointDrag(e: React.PointerEvent<SVGCircleElement>, id: string) {
@@ -213,22 +252,28 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
     setPointDrag(id);
   }
 
+  function startFeatureDrag(e: React.PointerEvent<SVGRectElement>, feature: RoomFeature) {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    setFeatureDrag({
+      id: feature.id,
+      startX: toSvgX(e.clientX),
+      startY: toSvgY(e.clientY),
+      startFeatureX: feature.x,
+      startFeatureY: feature.y,
+    });
+  }
+
   const dimY = iy + D + extraBottom + 30;
   const widthDimY = hfs ? oy - 14 : dimY;
   const dimX = ox - 22;
-  const lzX = ix + config.leftReturn * I;
-  const rzX = rx - config.rightReturn * I;
-  const centerZoneW = config.width - (hl ? config.leftReturn : 0) - (hr ? config.rightReturn : 0);
-  const centerZoneCx = hl && hr ? (lzX + rzX) / 2 : hl ? (lzX + rx) / 2 : hr ? (ix + rzX) / 2 : ix + W / 2;
-  const leftZoneActive = drag === "leftZone" || hover === "leftZone";
-  const rightZoneActive = drag === "rightZone" || hover === "rightZone";
-  const depthActive = drag === "depth" || hover === "depth";
+  const depthActive = drag?.id === "depth" || hover === "depth";
 
   const handleProps = (id: Handle) => ({
-    active: drag === id || hover === id,
+    active: drag?.id === id || hover === id,
     onStart: startDrag,
     onHover: setHover,
-    onLeave: (handle: Handle) => { if (drag !== handle) setHover(null); },
+    onLeave: (handle: Handle) => { if (drag?.id !== handle) setHover(null); },
   });
 
   // For walk-in, keep the depth handle out of the doorway controls.
@@ -248,8 +293,8 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
       className="w-full select-none"
       style={{ maxHeight: "calc(100vh - 220px)", touchAction: "none" }}
       onPointerMove={onPointerMove}
-      onPointerUp={() => { setDrag(null); setPointDrag(null); setHover(null); }}
-      onPointerLeave={() => { setDrag(null); setPointDrag(null); setHover(null); }}
+      onPointerUp={() => { setDrag(null); setPointDrag(null); setFeatureDrag(null); setHover(null); }}
+      onPointerLeave={() => { setDrag(null); setPointDrag(null); setFeatureDrag(null); setHover(null); }}
     >
       {/* ── Background grid (6" cells) ── */}
       <defs>
@@ -277,6 +322,49 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
       {/* ── Measured footprint from manual/AR points ── */}
       <polygon points={footprintPath} fill="#dfe7e0" fillOpacity={0.34} stroke="#48645a" strokeWidth={1.5} strokeLinejoin="round" />
 
+      {/* ── Room features and constraints ── */}
+      {roomFeatures.map((feature) => {
+        const planSize = featurePlanSize(feature);
+        const x = ix + feature.x * I;
+        const y = iy + feature.y * I;
+        const w = planSize.width * I;
+        const h = planSize.depth * I;
+        const isColumn = feature.kind === "column";
+        const isRegister = feature.kind === "air-register";
+
+        return (
+          <g key={feature.id}>
+            <rect
+              x={x}
+              y={y}
+              width={w}
+              height={h}
+              rx={isColumn ? 2 : 4}
+              fill={isColumn ? "#5d625d" : isRegister ? "#d8e5e4" : "#efe7dd"}
+              fillOpacity={isColumn ? 0.72 : 0.92}
+              stroke={isColumn ? "#25302c" : isRegister ? "#5d7f82" : "#9a7b62"}
+              strokeWidth={1.3}
+              strokeDasharray={feature.behavior === "clearance-zone" ? "4 3" : undefined}
+              style={{ cursor: "grab" }}
+              onPointerDown={(event) => startFeatureDrag(event, feature)}
+            />
+            <text
+              x={x + w / 2}
+              y={y + h / 2}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill={isColumn ? "#fff" : "#25302c"}
+              fontSize={8}
+              fontFamily="system-ui,sans-serif"
+              fontWeight={700}
+              pointerEvents="none"
+            >
+              {feature.kind === "air-register" ? "AIR" : feature.kind === "access-panel" ? "ACCESS" : "COLUMN"}
+            </text>
+          </g>
+        );
+      })}
+
       {/* ── Back wall ── */}
       <rect x={ox} y={oy} width={WALL * 2 + W} height={WALL} fill="#2c2824" />
 
@@ -287,20 +375,6 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
       {/* ── Front stubs (walk-in) ── */}
       {hfs && <rect x={ox} y={iy + D} width={WALL + fsd} height={WALL} fill="#2c2824" />}
       {hfs && <rect x={rx - fsd} y={iy + D} width={fsd + WALL} height={WALL} fill="#2c2824" />}
-
-      {/* ── Storage zones ── */}
-      {hl && <line x1={lzX} y1={iy} x2={lzX} y2={iy + D} stroke={leftZoneActive ? "#25302c" : "#aaa49c"} strokeWidth={leftZoneActive ? 1.8 : 1.2} strokeDasharray="5 4" />}
-      {hr && <line x1={rzX} y1={iy} x2={rzX} y2={iy + D} stroke={rightZoneActive ? "#25302c" : "#aaa49c"} strokeWidth={rightZoneActive ? 1.8 : 1.2} strokeDasharray="5 4" />}
-      {hl && (
-        <text x={(ix + lzX) / 2} y={iy + D / 2} textAnchor="middle" dominantBaseline="middle"
-              fontSize={9} fill="#7a7268" fontFamily="system-ui,sans-serif">Left {config.leftReturn}&quot;</text>
-      )}
-      <text x={centerZoneCx} y={iy + D / 2} textAnchor="middle" dominantBaseline="middle"
-            fontSize={9} fill="#7a7268" fontFamily="system-ui,sans-serif">Back {centerZoneW}&quot;</text>
-      {hr && (
-        <text x={(rzX + rx) / 2} y={iy + D / 2} textAnchor="middle" dominantBaseline="middle"
-              fontSize={9} fill="#7a7268" fontFamily="system-ui,sans-serif">Right {config.rightReturn}&quot;</text>
-      )}
 
       {/* ── Wall labels ── */}
       <text x={ix + W / 2} y={oy + WALL / 2} textAnchor="middle" dominantBaseline="middle"
@@ -353,42 +427,26 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
       })}
       <DragHandle cx={rx} cy={iy + D / 2} id="width" cursor="ew-resize" {...handleProps("width")} />
       <DragHandle cx={depthHandleCx} cy={depthHandleCy} id="depth" cursor="ns-resize" {...handleProps("depth")} />
-      {hl && <DragHandle cx={lzX} cy={iy + D / 2} id="leftZone" cursor="ew-resize" quiet {...handleProps("leftZone")} />}
-      {hr && <DragHandle cx={rzX} cy={iy + D / 2} id="rightZone" cursor="ew-resize" quiet {...handleProps("rightZone")} />}
       {hfs && <DragHandle cx={ix + fsd} cy={iy + D + WALL / 2} id="frontLeftStub" cursor="ew-resize" quiet {...handleProps("frontLeftStub")} />}
       {hfs && <DragHandle cx={rx - fsd} cy={iy + D + WALL / 2} id="frontRightStub" cursor="ew-resize" quiet {...handleProps("frontRightStub")} />}
 
       {/* ── Handle tooltip labels ── */}
-      {(drag === "width" || hover === "width") && (
+      {(drag?.id === "width" || hover === "width") && (
         <text x={rx + HANDLE_R + 10} y={iy + D / 2} dominantBaseline="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">width</text>
       )}
-      {leftZoneActive && (
-        <g>
-          <rect x={lzX - 56} y={iy + D / 2 - 30} width={112} height={20} rx={4} fill="white" fillOpacity={0.94} />
-          <text x={lzX} y={iy + D / 2 - 17} textAnchor="middle"
-                fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">left storage zone</text>
-        </g>
-      )}
-      {rightZoneActive && (
-        <g>
-          <rect x={rzX - 58} y={iy + D / 2 - 30} width={116} height={20} rx={4} fill="white" fillOpacity={0.94} />
-          <text x={rzX} y={iy + D / 2 - 17} textAnchor="middle"
-                fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">right storage zone</text>
-        </g>
-      )}
-      {(drag === "frontLeftStub" || hover === "frontLeftStub") && (
+      {(drag?.id === "frontLeftStub" || hover === "frontLeftStub") && (
         <text x={ix + fsd} y={iy + D + WALL + 16} textAnchor="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">entry wall</text>
       )}
-      {(drag === "frontRightStub" || hover === "frontRightStub") && (
+      {(drag?.id === "frontRightStub" || hover === "frontRightStub") && (
         <text x={rx - fsd} y={iy + D + WALL + 16} textAnchor="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">entry wall</text>
       )}
-      {pointDrag && (
+      {(pointDrag || featureDrag) && (
         <text x={ix + W / 2} y={iy + D + extraBottom + 48} textAnchor="middle"
               fontSize={10} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">
-          editing measured AR-style footprint point
+          {featureDrag ? "editing room feature" : "editing measured AR-style footprint point"}
         </text>
       )}
     </svg>

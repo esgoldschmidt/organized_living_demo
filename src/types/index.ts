@@ -73,6 +73,23 @@ export interface MeasuredFootprint {
   confidence: number;
 }
 
+export type RoomFeatureKind = "column" | "air-register" | "access-panel";
+export type RoomFeatureBehavior = "obstruction" | "clearance-zone" | "mountable-surface";
+
+export interface RoomFeature {
+  id: string;
+  kind: RoomFeatureKind;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  depth: number;
+  height: number;
+  elevation: number;
+  rotation: 0 | 90;
+  behavior: RoomFeatureBehavior;
+}
+
 export interface PaletteItem {
   type: ComponentType;
   label: string;
@@ -84,6 +101,48 @@ export interface PaletteItem {
   priceEach: number;
 }
 
+export type ProductLine = "freedomRail" | "select";
+export type ProductBlockKind = "shelf-rod" | "double-hang" | "drawer-stack" | "shoe-tower" | "open-shelves";
+export type ProductBlockPartType = "rail" | "upright" | "shelf" | "rod" | "drawer" | "shoe-shelf" | "panel";
+
+export interface ProductBlockPart {
+  id: string;
+  type: ProductBlockPartType;
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  width: number;
+  height: number;
+  depth: number;
+}
+
+export interface ProductBlock {
+  id: string;
+  name: string;
+  kind: ProductBlockKind;
+  productLine: ProductLine;
+  finish: string;
+  width: number;
+  height: number;
+  depth: number;
+  parts: ProductBlockPart[];
+  price: number;
+}
+
+export type MaterialLineCategory = "manufactured" | "hardware" | "install";
+
+export interface MaterialLine {
+  id: string;
+  sku: string;
+  name: string;
+  category: MaterialLineCategory;
+  qty: number;
+  unit: "each" | "ft" | "pack" | "set";
+  unitPrice: number;
+  note: string;
+}
+
 export interface DesignSnapshot {
   dimensions: ClosetDimensions;
   components: ClosetComponent[];
@@ -91,6 +150,11 @@ export interface DesignSnapshot {
   closetFootprint?: MeasuredFootprint;
   enabledPieceIds?: string[];
   shelfPositions?: Record<string, [number, number, number]>;
+  pieceRotations?: Record<string, 0 | 90 | 180 | 270>;
+  productBlocks?: ProductBlock[];
+  blockPositions?: Record<string, [number, number, number]>;
+  blockRotations?: Record<string, 0 | 90 | 180 | 270>;
+  roomFeatures?: RoomFeature[];
 }
 
 export const ComponentTypeSchema = z.enum([
@@ -158,6 +222,45 @@ export const MeasuredFootprintSchema = z.object({
   confidence: z.number(),
 });
 
+export const RoomFeatureSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["column", "air-register", "access-panel"]),
+  label: z.string(),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  depth: z.number(),
+  height: z.number(),
+  elevation: z.number(),
+  rotation: z.union([z.literal(0), z.literal(90)]).optional().default(0),
+  behavior: z.enum(["obstruction", "clearance-zone", "mountable-surface"]),
+});
+
+export const ProductBlockPartSchema = z.object({
+  id: z.string(),
+  type: z.enum(["rail", "upright", "shelf", "rod", "drawer", "shoe-shelf", "panel"]),
+  label: z.string(),
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+  width: z.number(),
+  height: z.number(),
+  depth: z.number(),
+});
+
+export const ProductBlockSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.enum(["shelf-rod", "double-hang", "drawer-stack", "shoe-tower", "open-shelves"]),
+  productLine: z.enum(["freedomRail", "select"]),
+  finish: z.string(),
+  width: z.number(),
+  height: z.number(),
+  depth: z.number(),
+  parts: z.array(ProductBlockPartSchema),
+  price: z.number(),
+});
+
 export const DesignSnapshotSchema = z.object({
   dimensions: ClosetDimensionsSchema,
   components: z.array(ClosetComponentSchema),
@@ -165,6 +268,11 @@ export const DesignSnapshotSchema = z.object({
   closetFootprint: MeasuredFootprintSchema.optional(),
   enabledPieceIds: z.array(z.string()).optional(),
   shelfPositions: z.record(z.string(), z.tuple([z.number(), z.number(), z.number()])).optional(),
+  pieceRotations: z.record(z.string(), z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])).optional(),
+  productBlocks: z.array(ProductBlockSchema).optional(),
+  blockPositions: z.record(z.string(), z.tuple([z.number(), z.number(), z.number()])).optional(),
+  blockRotations: z.record(z.string(), z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])).optional(),
+  roomFeatures: z.array(RoomFeatureSchema).optional(),
 });
 
 export const PALETTE_ITEMS: PaletteItem[] = [
