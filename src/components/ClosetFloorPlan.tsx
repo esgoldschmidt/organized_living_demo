@@ -240,8 +240,6 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
     sy: iy + point.y * I,
   }));
   const footprintPath = measuredPoints.map((point) => `${point.sx},${point.sy}`).join(" ");
-  const leftJambPoint = measuredPoints.find((point) => point.id === footprint.opening.leftJambId);
-  const rightJambPoint = measuredPoints.find((point) => point.id === footprint.opening.rightJambId);
 
   return (
     <svg
@@ -278,17 +276,6 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
 
       {/* ── Measured footprint from manual/AR points ── */}
       <polygon points={footprintPath} fill="#dfe7e0" fillOpacity={0.34} stroke="#48645a" strokeWidth={1.5} strokeLinejoin="round" />
-      {leftJambPoint && rightJambPoint && (
-        <line
-          x1={leftJambPoint.sx}
-          y1={leftJambPoint.sy}
-          x2={rightJambPoint.sx}
-          y2={rightJambPoint.sy}
-          stroke="#8b735c"
-          strokeWidth={2}
-          strokeDasharray="6 4"
-        />
-      )}
 
       {/* ── Back wall ── */}
       <rect x={ox} y={oy} width={WALL * 2 + W} height={WALL} fill="#2c2824" />
@@ -340,19 +327,27 @@ export default function ClosetFloorPlan({ config, footprint, onChange, onFootpri
       {measuredPoints.map((point) => {
         const active = pointDrag === point.id;
         const isJamb = point.type === "left-jamb" || point.type === "right-jamb";
+        const visualR = active ? 7 : isJamb ? 4.5 : 5.5;
         return (
           <g key={point.id}>
             <circle
               cx={point.sx}
               cy={point.sy}
-              r={isJamb ? 10 : 8}
-              fill={active ? "#25302c" : "#fff"}
-              stroke={isJamb ? "#8b735c" : "#48645a"}
-              strokeWidth={2}
+              r={14}
+              fill="transparent"
               style={{ cursor: "grab" }}
               onPointerDown={(event) => startPointDrag(event, point.id)}
             />
-            <circle cx={point.sx} cy={point.sy} r={2.2} fill={active ? "#fff" : "#48645a"} pointerEvents="none" />
+            <circle
+              cx={point.sx}
+              cy={point.sy}
+              r={visualR}
+              fill={active ? "#25302c" : isJamb ? "#f8f7f3" : "#fff"}
+              stroke={isJamb ? "#8b735c" : "#48645a"}
+              strokeWidth={active ? 2 : 1.5}
+              pointerEvents="none"
+            />
+            <circle cx={point.sx} cy={point.sy} r={1.8} fill={active ? "#fff" : isJamb ? "#8b735c" : "#48645a"} pointerEvents="none" />
           </g>
         );
       })}

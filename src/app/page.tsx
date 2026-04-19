@@ -115,7 +115,7 @@ export default function Home() {
           </div>
 
           <div className="rounded-xl border border-[#cdd8d0] bg-white p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-[#1f2824]">Measure space</h2>
+            <h2 className="text-sm font-semibold text-[#1f2824]">Measure space using your phone</h2>
             <p className="mt-1 text-xs leading-5 text-[#6f7d76]">
               Prototype for the AR path: start at the left jamb, trace clockwise, then confirm the generated 2D shape.
             </p>

@@ -1315,7 +1315,7 @@ export default function ClosetExperience3D() {
   const selectedModule = modules.find((pieceModule) => pieceModule.id === effectiveSelectedPiece) ?? null;
   const clearance = Math.round(config.height - config.shelfHeight - SHELF_THICKNESS);
   const minZoom = cameraView === "top" ? 0.72 : cameraView === "front" ? 0.76 : cameraView === "detail" ? 0.42 : 0.52;
-  const maxZoom = cameraView === "top" ? 1.38 : cameraView === "front" ? 1.08 : cameraView === "detail" ? 2.05 : 1.7;
+  const maxZoom = cameraView === "top" ? 1.38 : cameraView === "front" ? 1.08 : cameraView === "detail" ? 2.05 : 1.24;
   const effectiveZoom = Math.max(minZoom, Math.min(maxZoom, zoom));
   const activePieces = useMemo(() => getActivePieces(config, enabledPieces), [config, enabledPieces]);
   const visibleGroups = useMemo(() => getVisiblePieceGroups(config), [config]);

@@ -76,13 +76,17 @@ export function buildFootprintFromConfig(config: ClosetConfig, source: MeasuredF
 }
 
 export function buildMockArFootprint(config: ClosetConfig): MeasuredFootprint {
+  const columnLeft = Math.round(config.width * 0.48);
+  const columnRight = columnLeft + 18;
+  const columnDepth = 14;
   const points: MeasuredFootprint["points"] = [
     { id: "left-jamb", x: config.frontStubDepth, y: config.depth, type: "left-jamb" },
     { id: "front-left", x: 0, y: config.depth, type: "corner" },
     { id: "left-back", x: 0, y: 0, type: "corner" },
-    { id: "jog-in", x: 42, y: 0, type: "inside-corner" },
-    { id: "column-face", x: 42, y: 14, type: "column" },
-    { id: "jog-out", x: 58, y: 14, type: "inside-corner" },
+    { id: "column-left-back", x: columnLeft, y: 0, type: "inside-corner" },
+    { id: "column-left-face", x: columnLeft, y: columnDepth, type: "column" },
+    { id: "column-right-face", x: columnRight, y: columnDepth, type: "column" },
+    { id: "column-right-back", x: columnRight, y: 0, type: "inside-corner" },
     { id: "back-right", x: config.width, y: 0, type: "corner" },
     { id: "front-right", x: config.width, y: config.depth, type: "corner" },
     { id: "right-jamb", x: config.width - config.frontStubDepth, y: config.depth, type: "right-jamb" },
@@ -95,7 +99,7 @@ export function buildMockArFootprint(config: ClosetConfig): MeasuredFootprint {
     walls: points.slice(0, -1).map((point, index) => ({
       from: point.id,
       to: points[index + 1].id,
-      label: index === 2 || index === 4 ? "column jog" : index === 5 ? "back wall" : "measured wall",
+      label: index >= 2 && index <= 5 ? "column jog" : index === 6 ? "back wall" : "measured wall",
     })),
     opening: {
       leftJambId: "left-jamb",
