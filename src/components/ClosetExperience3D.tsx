@@ -6,8 +6,8 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { ContactShadows, Html, Line, RoundedBox, Text } from "@react-three/drei";
 import * as THREE from "three";
 import Link from "next/link";
-import { buildMaterialList, useDesignStore } from "@/store/designStore";
-import DealEconomicsPanel from "@/components/DealEconomicsPanel";
+import { buildMaterialList, computeFeetOfProduct, useDesignStore } from "@/store/designStore";
+import DealEconomicsPanel, { computeDealEconomics } from "@/components/DealEconomicsPanel";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
 import type { ClosetComponent, MeasuredFootprint, ProductBlock, ProductBlockPart, ProductLine, RoomFeature } from "@/types";
 
@@ -215,18 +215,6 @@ function getActivePieces(_config: DesignConfig, enabledPieces: Set<PieceId>) {
 
 function getComponentsSubtotal(config: DesignConfig, enabledPieces: Set<PieceId>) {
   return getActivePieces(config, enabledPieces).reduce((sum, piece) => sum + piece.price * piece.qty, 0);
-}
-
-function getProjectAllowances(config: DesignConfig) {
-  const linearRun = config.width;
-  const materialAllowance = Math.round((linearRun * 4 + Math.max(0, config.height - 96) * 12) / 25) * 25;
-  const installAllowance = 1600;
-  return { materialAllowance, installAllowance, linearRun };
-}
-
-function getSystemPrice(config: DesignConfig, enabledPieces: Set<PieceId>) {
-  const { materialAllowance, installAllowance } = getProjectAllowances(config);
-  return Math.round((getComponentsSubtotal(config, enabledPieces) + materialAllowance + installAllowance) / 50) * 50;
 }
 
 function getStorageStats(config: DesignConfig, enabledPieces: Set<PieceId>, shelves: ShelfComponent[]) {
@@ -1175,7 +1163,6 @@ function ClosetRoom({
   const frontOpacity = hideFrontWallMass ? 0 : sideOpacity;
   const doorwayContextOpacity = forceOpen ? 0 : wallVisibility === "smart" ? 0.34 : 0.78;
   const ceilingOpacity = cameraView === "top" || smartCutaway ? 0 : forceOpen ? 0.03 : mode === "inspection" ? 0.28 : 0.88;
-  const flangeW = 56;
   const pointById = useMemo(() => new Map(footprint.points.map((point) => [point.id, point])), [footprint.points]);
   const footprintPoints = useMemo(() => footprint.points.map((point) => ({
     id: point.id,
@@ -1196,11 +1183,13 @@ function ClosetRoom({
   const rightJamb = pointById.get(footprint.opening.rightJambId);
   const doorOpeningWidth = Math.max(24, footprint.opening.width);
   const frontWallZ = ((leftJamb?.y ?? config.depth) + (rightJamb?.y ?? config.depth)) / 2 - config.depth / 2 + WALL_THICKNESS / 2;
+  const leftJambWorldX = (leftJamb?.x ?? (config.frontLeftStubDepth ?? config.frontStubDepth)) - config.width / 2;
+  const rightJambWorldX = (rightJamb?.x ?? config.width - (config.frontRightStubDepth ?? config.frontStubDepth)) - config.width / 2;
   const roomWallExtension = 64;
-  const leftDoorJambX = (leftJamb?.x ?? (config.frontLeftStubDepth ?? config.frontStubDepth)) - config.width / 2 - WALL_THICKNESS / 2;
-  const rightDoorJambX = (rightJamb?.x ?? config.width - (config.frontRightStubDepth ?? config.frontStubDepth)) - config.width / 2 + WALL_THICKNESS / 2;
-  const leftRoomWallX = -doorOpeningWidth / 2 - WALL_THICKNESS - roomWallExtension / 2;
-  const rightRoomWallX = doorOpeningWidth / 2 + WALL_THICKNESS + roomWallExtension / 2;
+  const leftDoorJambX = leftJambWorldX - WALL_THICKNESS / 2;
+  const rightDoorJambX = rightJambWorldX + WALL_THICKNESS / 2;
+  const leftRoomWallX = leftJambWorldX - WALL_THICKNESS - roomWallExtension / 2;
+  const rightRoomWallX = rightJambWorldX + WALL_THICKNESS + roomWallExtension / 2;
   const measuredWalls = footprint.walls
     .map((wall) => {
       const start = pointById.get(wall.from);
@@ -1229,7 +1218,7 @@ function ClosetRoom({
     .filter((wall): wall is NonNullable<typeof wall> => Boolean(wall));
 
   const showWalls = !forceOpen;
-  const showDoorwayContext = showWalls && doorwayContextOpacity > 0;
+  const showDoorwayContext = showWalls && doorwayContextOpacity > 0 && cameraView !== "top";
 
   return (
     <group>
@@ -1272,11 +1261,7 @@ function ClosetRoom({
         </>
       )}
 
-      {/* room floor context plus measured closet footprint */}
-      <mesh position={[0, -0.32, config.depth / 4 + 8]} receiveShadow>
-        <boxGeometry args={[config.width + (WALL_THICKNESS + flangeW) * 2, 0.35, config.depth + flangeW + WALL_THICKNESS * 2]} />
-        <meshStandardMaterial color="#cfc8be" roughness={0.88} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
-      </mesh>
+      {/* measured closet footprint */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.25, 0]} receiveShadow>
         <shapeGeometry args={[floorShape]} />
         <meshStandardMaterial color="#d8d2c8" roughness={0.88} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
@@ -1523,14 +1508,6 @@ function MeasurementLine({
   return (
     <group>
       <Line points={[start, end]} color={color} lineWidth={1.15} transparent opacity={0.74} />
-      <mesh position={start}>
-        <sphereGeometry args={[0.55, 12, 12]} />
-        <meshBasicMaterial color={color} />
-      </mesh>
-      <mesh position={end}>
-        <sphereGeometry args={[0.55, 12, 12]} />
-        <meshBasicMaterial color={color} />
-      </mesh>
       <Text
         position={mid}
         fontSize={2.2}
@@ -1901,6 +1878,8 @@ export default function ClosetExperience3D() {
     blockRotations,
     setBlockRotations,
     roomFeatures,
+    laborRatePerFt,
+    laborMarkupPct,
   } = useDesignStore();
   const [mode, setMode] = useState<ViewMode>("closet");
   const [cameraView, setCameraView] = useState<CameraView>("corner");
@@ -1929,17 +1908,24 @@ export default function ClosetExperience3D() {
     () => productBlocks.length > 0 ? productBlocks.reduce((sum, block) => sum + block.price, 0) : getComponentsSubtotal(config, enabledPieces),
     [config, enabledPieces, productBlocks]
   );
-  const allowances = useMemo(() => getProjectAllowances(config), [config]);
-  const systemPrice = useMemo(
-    () => productBlocks.length > 0 ? Math.round((componentsSubtotal + allowances.materialAllowance + allowances.installAllowance) / 50) * 50 : getSystemPrice(config, enabledPieces),
-    [allowances.installAllowance, allowances.materialAllowance, componentsSubtotal, config, enabledPieces, productBlocks.length]
-  );
   const storageStats = useMemo(() => getStorageStats(config, enabledPieces, shelves), [config, enabledPieces, shelves]);
   const materialLines = useMemo(() => buildMaterialList(productBlocks, config), [config, productBlocks]);
   const materialSubtotal = useMemo(
     () => materialLines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0),
     [materialLines]
   );
+  const feetOfProduct = useMemo(() => computeFeetOfProduct(productBlocks, config), [config, productBlocks]);
+  const pricing = useMemo(
+    () => computeDealEconomics({
+      materialCost: materialSubtotal,
+      productSellPrice: componentsSubtotal,
+      feetOfProduct,
+      laborRatePerFt,
+      laborMarkupPct,
+    }),
+    [componentsSubtotal, feetOfProduct, laborMarkupPct, laborRatePerFt, materialSubtotal]
+  );
+  const systemPrice = pricing.projectTotal;
   const featurePlacementNotes = useMemo(
     () => getFeaturePlacementNotes(config, modules, roomFeatures),
     [config, modules, roomFeatures]
@@ -2095,9 +2081,9 @@ export default function ClosetExperience3D() {
           </div>
 
           <div className="absolute right-4 top-4 rounded-md border border-white/60 bg-white/90 px-4 py-3 shadow-lg backdrop-blur-md">
-            <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7a8a82]">This set</div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-[#7a8a82]">Proposal Total</div>
             <div className="mt-0.5 text-2xl font-semibold tracking-tight text-[#1f2824]">{formatCurrency(systemPrice)}</div>
-            <div className="mt-0.5 text-[10px] text-[#9aa89f]">updates with selected pieces</div>
+            <div className="mt-0.5 text-[10px] text-[#9aa89f]">blocks plus labor</div>
           </div>
 
           <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2">
@@ -2176,22 +2162,30 @@ export default function ClosetExperience3D() {
           </div>
 
           <div className="mb-5">
-            <DealEconomicsPanel materialCost={materialSubtotal} />
+            <DealEconomicsPanel materialCost={materialSubtotal} productSellPrice={componentsSubtotal} />
           </div>
 
           <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[#1f2824]">Built product blocks</h2>
-            <Link href="/blocks" className="text-[10px] font-semibold text-[#48645a] hover:text-[#25302c]">
-              Edit blocks
-            </Link>
+            <div>
+              <h2 className="text-sm font-semibold text-[#1f2824]">Built product blocks</h2>
+              <div className="text-[10px] text-[#7a8a82]">Sell subtotal {formatCurrency(componentsSubtotal)}</div>
+            </div>
+            <Link href="/blocks" className="text-[10px] font-semibold text-[#48645a] hover:text-[#25302c]">Edit blocks</Link>
           </div>
 
           <div className="space-y-3">
             {productBlocks.length > 0 ? productBlocks.map((block) => (
               <div key={block.id} className="rounded-md border border-[#e4ece4] bg-[#f9fbf9] p-3">
-                <div className="text-xs font-semibold text-[#25302c]">{block.name}</div>
-                <div className="mt-1 text-[10px] text-[#6f7d76]">
-                  {block.productLine === "freedomRail" ? "freedomRail" : "Select"} · {block.finish} · {block.width}&quot; wide
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-[#25302c]">{block.name}</div>
+                    <div className="mt-1 text-[10px] text-[#6f7d76]">
+                      {block.productLine === "freedomRail" ? "freedomRail" : "Select"} · {block.finish} · {block.width}&quot; wide
+                    </div>
+                  </div>
+                  <div className="rounded bg-white px-2 py-1 text-[10px] font-semibold text-[#53635d]">
+                    {formatCurrency(block.price)}
+                  </div>
                 </div>
               </div>
             )) : visibleGroups.map((group) => (
@@ -2226,10 +2220,10 @@ export default function ClosetExperience3D() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-[#25302c]">Mock materials</h3>
-                  <p className="mt-1 text-xs leading-5 text-[#6f7d76]">Manufactured parts plus install hardware.</p>
+                  <p className="mt-1 text-xs leading-5 text-[#6f7d76]">Internal cost basis, not the customer price.</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Takeoff</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Cost Basis</div>
                   <div className="text-sm font-bold text-[#1f2824]">{formatCurrency(materialSubtotal)}</div>
                 </div>
               </div>
@@ -2353,7 +2347,7 @@ export default function ClosetExperience3D() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="rounded-md bg-[#f0f4f0] px-2 py-1 text-[11px] font-semibold text-[#53635d]">
-                        {formatCurrency(pieceModule.price)}
+                        {formatCurrency(pieceModule.price)} sell
                       </span>
                       <button
                         type="button"

@@ -778,6 +778,10 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
   setClosetFootprint: (footprint) => set((s) => {
     const normalizedFootprint = normalizeFootprintToOrigin(footprint);
     const { width, depth } = getFootprintSize(normalizedFootprint);
+    const leftJamb = normalizedFootprint.points.find((point) => point.id === normalizedFootprint.opening.leftJambId);
+    const rightJamb = normalizedFootprint.points.find((point) => point.id === normalizedFootprint.opening.rightJambId);
+    const leftStub = leftJamb ? Math.round(leftJamb.x) : undefined;
+    const rightStub = rightJamb ? Math.round(width - rightJamb.x) : undefined;
 
     return {
       closetFootprint: normalizedFootprint,
@@ -786,6 +790,8 @@ export const useDesignStore = create<DesignStore>((set, get) => ({
         width,
         depth,
         shape: "walk-in",
+        ...(leftStub !== undefined ? { frontLeftStubDepth: leftStub } : {}),
+        ...(rightStub !== undefined ? { frontRightStubDepth: rightStub } : {}),
       },
     };
   }),

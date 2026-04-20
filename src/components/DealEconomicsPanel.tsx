@@ -68,14 +68,48 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function DealEconomicsPanel({ materialCost }: { materialCost: number }) {
+export function computeDealEconomics({
+  materialCost,
+  productSellPrice,
+  feetOfProduct,
+  laborRatePerFt,
+  laborMarkupPct,
+}: {
+  materialCost: number;
+  productSellPrice: number;
+  feetOfProduct: number;
+  laborRatePerFt: number;
+  laborMarkupPct: number;
+}) {
+  const productMargin = productSellPrice - materialCost;
+  const productMarginPct = productSellPrice > 0 ? (productMargin / productSellPrice) * 100 : 0;
+  const laborCost = feetOfProduct * laborRatePerFt;
+  const laborMarkup = laborCost * (laborMarkupPct / 100);
+  const laborChargePft = laborRatePerFt * (1 + laborMarkupPct / 100);
+  const totalLaborPrice = laborCost + laborMarkup;
+  const projectTotal = productSellPrice + totalLaborPrice;
+  const gmDollars = projectTotal - materialCost - laborCost;
+  const gmPct = projectTotal > 0 ? (gmDollars / projectTotal) * 100 : 0;
+
+  return {
+    productMargin,
+    productMarginPct,
+    laborCost,
+    laborMarkup,
+    laborChargePft,
+    totalLaborPrice,
+    projectTotal,
+    gmDollars,
+    gmPct,
+  };
+}
+
+export default function DealEconomicsPanel({ materialCost, productSellPrice }: { materialCost: number; productSellPrice: number }) {
   const {
     closetConfig,
     productBlocks,
     projectName,
     setProjectName,
-    materialMarkupPct,
-    setMaterialMarkupPct,
     laborRatePerFt,
     setLaborRatePerFt,
     laborMarkupPct,
@@ -83,18 +117,23 @@ export default function DealEconomicsPanel({ materialCost }: { materialCost: num
   } = useDesignStore();
 
   const feetOfProduct = computeFeetOfProduct(productBlocks, closetConfig);
-
-  const materialMarkup = materialCost * (materialMarkupPct / 100);
-  const totalMaterialPrice = materialCost + materialMarkup;
-
-  const laborCost = feetOfProduct * laborRatePerFt;
-  const laborMarkup = laborCost * (laborMarkupPct / 100);
-  const laborChargePft = laborRatePerFt * (1 + laborMarkupPct / 100);
-  const totalLaborPrice = laborCost + laborMarkup;
-
-  const projectTotal = totalMaterialPrice + totalLaborPrice;
-  const gmDollars = projectTotal - materialCost - laborCost;
-  const gmPct = projectTotal > 0 ? (gmDollars / projectTotal) * 100 : 0;
+  const {
+    productMargin,
+    productMarginPct,
+    laborCost,
+    laborMarkup,
+    laborChargePft,
+    totalLaborPrice,
+    projectTotal,
+    gmDollars,
+    gmPct,
+  } = computeDealEconomics({
+    materialCost,
+    productSellPrice,
+    feetOfProduct,
+    laborRatePerFt,
+    laborMarkupPct,
+  });
 
   const gmColor = gmPct >= 35 ? "#3a7d5a" : gmPct >= 25 ? "#6f8c76" : "#a06858";
 
@@ -115,17 +154,11 @@ export default function DealEconomicsPanel({ materialCost }: { materialCost: num
       <div className="divide-y divide-[#f0f4f0]">
         {/* Material */}
         <div className="px-4 py-3">
-          <SectionLabel>Material</SectionLabel>
+          <SectionLabel>Product</SectionLabel>
           <div className="space-y-1.5">
-            <Row label="Cost on project" value={fmt(materialCost)} />
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[#53635d]">Material markup</span>
-              <div className="flex items-center gap-1.5">
-                <MarkupInput value={materialMarkupPct} onChange={setMaterialMarkupPct} />
-                <span className="text-[#8c9994]">% = {fmt(materialMarkup)}</span>
-              </div>
-            </div>
-            <Row label="Total material price" value={fmt(totalMaterialPrice)} bold />
+            <Row label="Block sell price" value={fmt(productSellPrice)} bold />
+            <Row label="Material cost basis" value={fmt(materialCost)} muted />
+            <Row label="Product margin" value={`${fmt(productMargin)} · ${productMarginPct.toFixed(1)}%`} />
           </div>
         </div>
 
@@ -157,7 +190,7 @@ export default function DealEconomicsPanel({ materialCost }: { materialCost: num
         {/* Summary */}
         <div className="px-4 py-3">
           <div className="space-y-1.5">
-            <Row label="Project total" value={fmt(projectTotal)} bold />
+            <Row label="Proposal total" value={fmt(projectTotal)} bold />
             <Row label="GM dollars" value={fmt(gmDollars)} />
           </div>
 
