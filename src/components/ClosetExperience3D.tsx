@@ -314,6 +314,25 @@ function getRoomWorldBounds(config: DesignConfig, footprint?: MeasuredFootprint)
   };
 }
 
+function getRoomSceneMetrics(config: DesignConfig, footprint?: MeasuredFootprint) {
+  const bounds = getRoomWorldBounds(config, footprint);
+  const width = bounds.right - bounds.left;
+  const depth = bounds.front - bounds.back;
+  const span = Math.max(width, depth, config.height);
+
+  return {
+    bounds,
+    center: {
+      x: (bounds.left + bounds.right) / 2,
+      z: (bounds.back + bounds.front) / 2,
+    },
+    span,
+    fogNear: Math.max(180, span * 1.45),
+    fogFar: Math.max(420, span * 3.4),
+    cameraFar: Math.max(2200, span * 5),
+  };
+}
+
 function getPlanDimensions(dimensions: [number, number, number], rotation: ModuleRotation) {
   const [w, , d] = dimensions;
   return rotation === 90 || rotation === 270 ? { width: d, depth: w } : { width: w, depth: d };
@@ -1700,37 +1719,43 @@ function CameraRig({
   cameraView,
   focusPosition,
   config,
+  footprint,
   zoom,
 }: {
   mode: ViewMode;
   cameraView: CameraView;
   focusPosition: [number, number, number] | null;
   config: DesignConfig;
+  footprint: MeasuredFootprint;
   zoom: number;
 }) {
   const { camera } = useThree();
   const target = useMemo(() => new THREE.Vector3(), []);
   const lookTarget = useMemo(() => new THREE.Vector3(), []);
   const destination = useMemo(() => new THREE.Vector3(), []);
+  const sceneMetrics = useMemo(() => getRoomSceneMetrics(config, footprint), [config, footprint]);
 
   useFrame(() => {
-    const focusX = focusPosition && mode === "inspection" ? focusPosition[0] : 0;
+    const focusX = focusPosition && mode === "inspection" ? focusPosition[0] : sceneMetrics.center.x;
     const focusY = focusPosition && mode === "inspection" ? focusPosition[1] : config.shelfHeight - 16;
-    const focusZ = focusPosition && mode === "inspection" ? focusPosition[2] : -3;
+    const focusZ = focusPosition && mode === "inspection" ? focusPosition[2] : sceneMetrics.center.z - 3;
 
     target.set(focusX, focusY, focusZ);
 
     if (cameraView === "front") {
-      destination.set(0, config.height * 0.58, config.depth + 110);
+      destination.set(sceneMetrics.center.x, config.height * 0.58, sceneMetrics.bounds.front + sceneMetrics.span * 0.95);
     } else if (cameraView === "top") {
-      const span = Math.max(config.width, config.depth);
-      const topH = Math.max(config.height + 140, span * 2.25);
-      destination.set(0, topH, 0.01);
-      target.set(0, 0, 0);
+      const topH = Math.max(config.height + 140, sceneMetrics.span * 2.25);
+      destination.set(sceneMetrics.center.x, topH, sceneMetrics.center.z + 0.01);
+      target.set(sceneMetrics.center.x, 0, sceneMetrics.center.z);
     } else if (cameraView === "detail" || mode === "inspection") {
       destination.set(focusX + 42, focusY + 5, focusZ + 58);
     } else {
-      destination.set(config.width * 0.52 + 36, config.height * 0.52, config.depth + config.width * 0.28 + 40);
+      destination.set(
+        sceneMetrics.bounds.right + sceneMetrics.span * 0.34,
+        config.height * 0.52,
+        sceneMetrics.bounds.front + sceneMetrics.span * 0.62
+      );
     }
 
     const zoomed = destination.clone().sub(lookTarget).multiplyScalar(zoom).add(lookTarget);
@@ -1740,9 +1765,9 @@ function CameraRig({
   });
 
   useEffect(() => {
-    camera.position.set(config.width * 0.76, config.height * 0.52, config.depth + 68);
-    camera.lookAt(0, config.shelfHeight - 16, -3);
-  }, [camera, config.depth, config.height, config.shelfHeight, config.width]);
+    camera.position.set(sceneMetrics.bounds.right + sceneMetrics.span * 0.42, config.height * 0.52, sceneMetrics.bounds.front + 68);
+    camera.lookAt(sceneMetrics.center.x, config.shelfHeight - 16, sceneMetrics.center.z - 3);
+  }, [camera, config.height, config.shelfHeight, sceneMetrics.bounds.front, sceneMetrics.bounds.right, sceneMetrics.center.x, sceneMetrics.center.z, sceneMetrics.span]);
 
   return null;
 }
@@ -1883,6 +1908,7 @@ export default function ClosetExperience3D() {
   const [showMeasurements, setShowMeasurements] = useState(false);
   const [zoom, setZoom] = useState(1.0);
   const [wallVisibility, setWallVisibility] = useState<WallVisibility>("smart");
+  const sceneMetrics = useMemo(() => getRoomSceneMetrics(config, closetFootprint), [config, closetFootprint]);
 
   const enabledPieces = useMemo(() => new Set(enabledPieceIds.filter(isPieceId)), [enabledPieceIds]);
   const shelves = useMemo(() => buildShelves(config, shelfPositions), [config, shelfPositions]);
@@ -2028,12 +2054,12 @@ export default function ClosetExperience3D() {
 
       <div className="grid overflow-x-hidden xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="relative h-[58vh] min-h-[380px] overflow-hidden bg-[#ebe5dc] md:h-[62vh] md:min-h-[500px] xl:h-[calc(100vh-210px)] xl:min-h-[560px]">
-          <Canvas shadows={{ type: THREE.PCFShadowMap }} camera={{ position: [112, 82, 124], fov: 38 }} dpr={[1, 2]} style={{ touchAction: "pan-y" }}>
+          <Canvas shadows={{ type: THREE.PCFShadowMap }} camera={{ position: [112, 82, 124], fov: 38, near: 0.1, far: sceneMetrics.cameraFar }} dpr={[1, 2]} style={{ touchAction: "pan-y" }}>
             <color attach="background" args={["#ebe5dc"]} />
-            <fog attach="fog" args={["#ebe5dc", 160, 300]} />
+            <fog attach="fog" args={["#ebe5dc", sceneMetrics.fogNear, sceneMetrics.fogFar]} />
             <Lights config={config} />
             <FloorShadow cameraView={cameraView} />
-            <CameraRig mode={mode} cameraView={cameraView} focusPosition={selectedModule?.position ?? null} config={config} zoom={effectiveZoom} />
+            <CameraRig mode={mode} cameraView={cameraView} focusPosition={selectedModule?.position ?? null} config={config} footprint={closetFootprint} zoom={effectiveZoom} />
             <ClosetRoom mode={mode} cameraView={cameraView} wallVisibility={wallVisibility} config={config} footprint={closetFootprint} />
             <RoomFeatures3D config={config} features={roomFeatures} wallVisibility={wallVisibility} blockedFeatureIds={blockedFeatureIds} />
             <ConfigurableModules

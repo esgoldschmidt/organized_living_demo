@@ -56,8 +56,10 @@ export default function Toolbar() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingLayouts, setLoadingLayouts] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [showSavedLabel, setShowSavedLabel] = useState(false);
   const toastIdRef = useRef(0);
   const lastToastMessageRef = useRef<string | null>(null);
+  const isSaving = persistenceState === "saving";
 
   const pushToast = (message: string, tone: ToastTone) => {
     const id = ++toastIdRef.current;
@@ -91,6 +93,24 @@ export default function Toolbar() {
       persistenceState === "error" ? "error" : "success"
     );
   }, [persistenceMessage, persistenceState]);
+
+  useEffect(() => {
+    if (persistenceState !== "saved") {
+      return;
+    }
+
+    setShowSavedLabel(true);
+    const timeoutId = window.setTimeout(() => setShowSavedLabel(false), 2400);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [persistenceMessage, persistenceState]);
+
+  const handleSave = async () => {
+    lastToastMessageRef.current = null;
+    setShowSavedLabel(false);
+    pushToast("Saving revision...", "info");
+    await saveDesign();
+  };
 
   const exportJSON = () => {
     const data = JSON.stringify({ dimensions, components, closetConfig, closetFootprint, enabledPieceIds, shelfPositions, pieceRotations, productBlocks, blockPositions, blockRotations, roomFeatures }, null, 2);
@@ -165,15 +185,36 @@ export default function Toolbar() {
           <div className="hidden rounded-full border border-stone-200 bg-white/70 px-2.5 py-1 text-[11px] text-stone-500 md:block">
             {projectId ? `Project ${projectId.slice(-6)}` : "Local draft"}
           </div>
+          {persistenceState !== "idle" && (
+            <div
+              className={`hidden rounded-full border px-2.5 py-1 text-[11px] md:block ${
+                persistenceState === "error"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : isSaving
+                    ? "border-stone-200 bg-white text-stone-600"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {isSaving
+                ? "Saving..."
+                : persistenceState === "error"
+                  ? "Save needs attention"
+                  : persistenceState === "loading"
+                    ? "Loading..."
+                  : "Saved"}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void saveDesign()}
-            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:bg-white"
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-70"
           >
             <Save size={13} />
-            Save
+            {isSaving ? "Saving..." : showSavedLabel ? "Saved" : "Save"}
           </button>
           <button
             onClick={() => void openLoadModal()}
@@ -324,7 +365,7 @@ export default function Toolbar() {
         </div>
       )}
 
-      <div className="pointer-events-none absolute right-5 top-20 z-50 flex w-full max-w-sm flex-col gap-3">
+      <div className="pointer-events-none fixed right-5 top-20 z-[80] flex w-full max-w-sm flex-col gap-3">
         {toasts.map((toast) => (
           <div
             key={toast.id}
