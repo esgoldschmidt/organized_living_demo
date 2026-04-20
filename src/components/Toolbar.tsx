@@ -32,6 +32,7 @@ interface SavedProject {
 export default function Toolbar() {
   const {
     saveDesign,
+    loadDesign,
     clearDesign,
     applySnapshot,
     components,
@@ -65,6 +66,11 @@ export default function Toolbar() {
       setToasts((current) => current.filter((toast) => toast.id !== id));
     }, 3200);
   };
+
+  useEffect(() => {
+    void loadDesign();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!persistenceMessage) {

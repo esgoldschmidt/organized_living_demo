@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import Toolbar from "@/components/Toolbar";
 import ClosetFloorPlan from "@/components/ClosetFloorPlan";
@@ -48,6 +49,18 @@ function featurePlanSize(feature: RoomFeature) {
     : { width: feature.width, depth: feature.depth };
 }
 
+function footprintSize(footprint: { points: { x: number; y: number }[] }) {
+  const xs = footprint.points.map((point) => point.x);
+  const ys = footprint.points.map((point) => point.y);
+
+  return {
+    width: Math.round(Math.max(...xs) - Math.min(...xs)),
+    depth: Math.round(Math.max(...ys) - Math.min(...ys)),
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+  };
+}
+
 export default function Home() {
   const {
     closetConfig: config,
@@ -64,6 +77,17 @@ export default function Home() {
   function adjustCeilingHeight(delta: number) {
     setClosetConfig({ height: Math.max(84, Math.min(120, config.height + delta)) });
   }
+
+  useEffect(() => {
+    const size = footprintSize(closetFootprint);
+    const mismatched =
+      Math.abs(size.width - config.width) > 1 ||
+      Math.abs(size.depth - config.depth) > 1 ||
+      Math.abs(size.minX) > 1 ||
+      Math.abs(size.minY) > 1;
+
+    if (mismatched) setClosetFootprint(closetFootprint);
+  }, [closetFootprint, config.depth, config.width, setClosetFootprint]);
 
   function rotateRoomFeature(id: string) {
     const feature = roomFeatures.find((item) => item.id === id);

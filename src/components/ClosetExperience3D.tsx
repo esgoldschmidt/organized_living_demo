@@ -7,6 +7,7 @@ import { ContactShadows, Html, Line, RoundedBox, Text } from "@react-three/drei"
 import * as THREE from "three";
 import Link from "next/link";
 import { buildMaterialList, useDesignStore } from "@/store/designStore";
+import DealEconomicsPanel from "@/components/DealEconomicsPanel";
 import type { ClosetConfig, ClosetShape } from "@/store/designStore";
 import type { ClosetComponent, MeasuredFootprint, ProductBlock, ProductBlockPart, ProductLine, RoomFeature } from "@/types";
 
@@ -285,6 +286,34 @@ interface ResolvedPanels {
   coveredBy: Partial<Record<"left" | "right" | "back", string>>;
 }
 
+interface PlanBounds {
+  left: number;
+  right: number;
+  back: number;
+  front: number;
+}
+
+function getRoomWorldBounds(config: DesignConfig, footprint?: MeasuredFootprint): PlanBounds {
+  if (footprint?.points.length) {
+    const xs = footprint.points.map((point) => point.x - config.width / 2);
+    const zs = footprint.points.map((point) => point.y - config.depth / 2);
+
+    return {
+      left: Math.min(...xs),
+      right: Math.max(...xs),
+      back: Math.min(...zs),
+      front: Math.max(...zs),
+    };
+  }
+
+  return {
+    left: -config.width / 2,
+    right: config.width / 2,
+    back: -config.depth / 2,
+    front: config.depth / 2,
+  };
+}
+
 function getPlanDimensions(dimensions: [number, number, number], rotation: ModuleRotation) {
   const [w, , d] = dimensions;
   return rotation === 90 || rotation === 270 ? { width: d, depth: w } : { width: w, depth: d };
@@ -354,7 +383,7 @@ function getPanelCount(panels: ResolvedPanels) {
   return Number(panels.left) + Number(panels.right) + Number(panels.back);
 }
 
-function getModulePlanBounds(module: Pick<PieceModule, "position" | "dimensions" | "rotation">) {
+function getModulePlanBounds(module: Pick<PieceModule, "position" | "dimensions" | "rotation">): PlanBounds {
   const plan = getPlanDimensions(module.dimensions, module.rotation);
 
   return {
@@ -365,7 +394,7 @@ function getModulePlanBounds(module: Pick<PieceModule, "position" | "dimensions"
   };
 }
 
-function getFeaturePlanBounds(config: DesignConfig, feature: RoomFeature) {
+function getFeaturePlanBounds(config: DesignConfig, feature: RoomFeature): PlanBounds {
   const center = getFeatureWorldPosition(config, feature);
   const plan = getFeaturePlanSize(feature);
 
@@ -377,11 +406,8 @@ function getFeaturePlanBounds(config: DesignConfig, feature: RoomFeature) {
   };
 }
 
-function boundsOverlap(
-  a: ReturnType<typeof getModulePlanBounds>,
-  b: ReturnType<typeof getFeaturePlanBounds>
-) {
-  return a.left < b.right && a.right > b.left && a.back < b.front && a.front > b.back;
+function boundsOverlap(a: PlanBounds, b: PlanBounds, gap = 0) {
+  return a.left < b.right - gap && a.right > b.left + gap && a.back < b.front - gap && a.front > b.back + gap;
 }
 
 function getFeatureWorldPosition(config: DesignConfig, feature: RoomFeature): [number, number, number] {
@@ -427,6 +453,34 @@ function getFeaturePlacementNotes(config: DesignConfig, modules: PieceModule[], 
   });
 }
 
+function verticalOverlap(a: PieceModule, b: PieceModule) {
+  const aBottom = a.position[1] - a.dimensions[1] / 2;
+  const aTop = a.position[1] + a.dimensions[1] / 2;
+  const bBottom = b.position[1] - b.dimensions[1] / 2;
+  const bTop = b.position[1] + b.dimensions[1] / 2;
+
+  return aBottom < bTop && aTop > bBottom;
+}
+
+function getModuleOverlapNotes(modules: PieceModule[]) {
+  const notes: { id: string; modules: [PieceModule, PieceModule]; message: string }[] = [];
+
+  modules.forEach((module, index) => {
+    modules.slice(index + 1).forEach((other) => {
+      if (!verticalOverlap(module, other)) return;
+      if (!boundsOverlap(getModulePlanBounds(module), getModulePlanBounds(other), 1.5)) return;
+
+      notes.push({
+        id: `${module.id}-${other.id}`,
+        modules: [module, other],
+        message: `${module.label} intersects ${other.label}. Move one block along its wall or rotate it.`,
+      });
+    });
+  });
+
+  return notes;
+}
+
 function formatRotation(rotation: ModuleRotation) {
   return `${rotation} deg`;
 }
@@ -452,10 +506,11 @@ function getDefaultBlockLayout(
   savedRotations: PieceRotations
 ): Record<string, { position: [number, number, number]; rotation: ModuleRotation }> {
   const spacing = 4;
+  const cornerGap = 14;
   const sideWallDepth = blocks.reduce((max, block) => Math.max(max, block.depth), 0);
   const backWallDepth = blocks.reduce((max, block) => Math.max(max, block.depth), 0);
-  const sideCornerClearance = Math.min(config.depth / 2, backWallDepth + spacing);
-  const backCornerClearance = Math.min(config.width / 4, sideWallDepth + spacing);
+  const sideCornerClearance = Math.min(config.depth / 2, backWallDepth + cornerGap);
+  const backCornerClearance = Math.min(config.width / 4, sideWallDepth + cornerGap);
   type WallRun = { wall: "back" | "left" | "right"; length: number; cursor: number; offset: number; rotation: ModuleRotation };
   const backRun: WallRun = {
     wall: "back",
@@ -516,9 +571,72 @@ function buildProductBlockModules(
   positions: ShelfPositions,
   rotations: PieceRotations
 ): PieceModule[] {
-  const defaultLayout = getDefaultBlockLayout(config, productBlocks, rotations);
+  const groupedBlocks = new Map<string, ProductBlock[]>();
+  const looseBlocks: ProductBlock[] = [];
 
-  return productBlocks.map((block) => {
+  productBlocks.forEach((block) => {
+    if (!block.groupId) {
+      looseBlocks.push(block);
+      return;
+    }
+    groupedBlocks.set(block.groupId, [...(groupedBlocks.get(block.groupId) ?? []), block]);
+  });
+
+  const layoutBlocks: ProductBlock[] = [
+    ...Array.from(groupedBlocks.entries()).map(([groupId, blocks]) => ({
+      ...blocks[0],
+      id: groupId,
+      name: "Linked Block Run",
+      width: blocks.reduce((sum, block) => sum + block.width, 0),
+      height: Math.max(...blocks.map((block) => block.height)),
+      depth: Math.max(...blocks.map((block) => block.depth)),
+      price: blocks.reduce((sum, block) => sum + block.price, 0),
+      parts: [],
+    })),
+    ...looseBlocks,
+  ];
+  const defaultLayout = getDefaultBlockLayout(config, layoutBlocks, rotations);
+
+  const groupedModules = Array.from(groupedBlocks.entries()).map(([groupId, blocks]) => {
+    const width = blocks.reduce((sum, block) => sum + block.width, 0);
+    const height = Math.max(...blocks.map((block) => block.height));
+    const depth = Math.max(...blocks.map((block) => block.depth));
+    const price = blocks.reduce((sum, block) => sum + block.price, 0);
+    const fallback = defaultLayout[groupId] ?? { position: [0, height / 2, -config.depth / 2 + depth / 2] as [number, number, number], rotation: 0 as ModuleRotation };
+    const rotation = rotations[groupId] ?? fallback.rotation;
+    const position = positions[groupId] ?? fallback.position;
+    let cursor = -width / 2;
+    const parts = blocks.flatMap((block) => {
+      const blockLeft = cursor;
+      cursor += block.width;
+      const blockCenterOffset = blockLeft + block.width / 2;
+      return block.parts.map((part) => ({
+        ...part,
+        id: `${block.id}-${part.id}`,
+        label: `${block.name}: ${part.label}`,
+        x: part.x + blockCenterOffset,
+      }));
+    });
+    const dimensions: [number, number, number] = [width, height, depth];
+
+    return {
+      id: groupId,
+      label: "Linked Block Run",
+      detail: `${blocks.length} stitched blocks · ${blocks.map((block) => block.name).join(" + ")}`,
+      price,
+      zone: "Built Assembly",
+      basePosition: fallback.position,
+      position,
+      dimensions,
+      rotation,
+      panels: resolvePanels(config, { position, dimensions, rotation }),
+      productLine: blocks.every((block) => block.productLine === blocks[0].productLine) ? blocks[0].productLine : undefined,
+      finish: blocks.every((block) => block.finish === blocks[0].finish) ? blocks[0].finish : "Mixed finishes",
+      parts,
+    };
+  });
+
+  const looseModules = looseBlocks.map((block) => {
     const fallback = defaultLayout[block.id] ?? { position: getDefaultBlockPosition(config, block), rotation: 0 as ModuleRotation };
     const rotation = rotations[block.id] ?? fallback.rotation;
     const position = positions[block.id] ?? fallback.position;
@@ -540,22 +658,76 @@ function buildProductBlockModules(
       parts: block.parts,
     };
   });
+
+  return [...groupedModules, ...looseModules];
 }
 
 function clampModulePosition(
   config: DesignConfig,
   dimensions: [number, number, number],
   rotation: ModuleRotation,
-  position: [number, number, number]
+  position: [number, number, number],
+  footprint?: MeasuredFootprint
 ): [number, number, number] {
   const { width, depth } = getPlanDimensions(dimensions, rotation);
   const [, h] = dimensions;
+  const wallInset = WALL_THICKNESS / 2;
+  const bounds = getRoomWorldBounds(config, footprint);
 
   return [
-    Number(Math.max(-config.width / 2 + width / 2, Math.min(config.width / 2 - width / 2, position[0])).toFixed(1)),
+    Number(Math.max(bounds.left + wallInset + width / 2, Math.min(bounds.right - wallInset - width / 2, position[0])).toFixed(1)),
     Number(Math.max(h / 2, Math.min(config.height - h / 2, position[1])).toFixed(1)),
-    Number(Math.max(-config.depth / 2 + depth / 2, Math.min(config.depth / 2 - depth / 2, position[2])).toFixed(1)),
+    Number(Math.max(bounds.back + wallInset + depth / 2, Math.min(bounds.front - wallInset - depth / 2, position[2])).toFixed(1)),
   ];
+}
+
+const EDGE_SNAP_THRESHOLD = 9;
+
+function snapModulePosition(
+  position: [number, number, number],
+  dimensions: [number, number, number],
+  rotation: ModuleRotation,
+  otherModules: PieceModule[],
+  config: DesignConfig,
+  footprint?: MeasuredFootprint
+): [number, number, number] {
+  const { width: w, depth: d } = getPlanDimensions(dimensions, rotation);
+  let [x, , z] = position;
+
+  const myL = x - w / 2;
+  const myR = x + w / 2;
+  const myB = z - d / 2;
+  const myF = z + d / 2;
+
+  // Wall edges
+  const wallInset = WALL_THICKNESS / 2;
+  const bounds = getRoomWorldBounds(config, footprint);
+  const wallL = bounds.left + wallInset + w / 2;
+  const wallR = bounds.right - wallInset - w / 2;
+  const wallB = bounds.back + wallInset + d / 2;
+  const wallF = bounds.front - wallInset - d / 2;
+
+  if (Math.abs(x - wallL) < EDGE_SNAP_THRESHOLD) x = wallL;
+  else if (Math.abs(x - wallR) < EDGE_SNAP_THRESHOLD) x = wallR;
+  if (Math.abs(z - wallB) < EDGE_SNAP_THRESHOLD) z = wallB;
+  else if (Math.abs(z - wallF) < EDGE_SNAP_THRESHOLD) z = wallF;
+
+  // Block-to-block edges
+  for (const other of otherModules) {
+    const { width: ow, depth: od } = getPlanDimensions(other.dimensions, other.rotation);
+    const [ox, , oz] = other.position;
+    const oL = ox - ow / 2;
+    const oR = ox + ow / 2;
+    const oB = oz - od / 2;
+    const oF = oz + od / 2;
+
+    if (Math.abs(myR - oL) < EDGE_SNAP_THRESHOLD) x = oL - w / 2;
+    else if (Math.abs(myL - oR) < EDGE_SNAP_THRESHOLD) x = oR + w / 2;
+    if (Math.abs(myF - oB) < EDGE_SNAP_THRESHOLD) z = oB - d / 2;
+    else if (Math.abs(myB - oF) < EDGE_SNAP_THRESHOLD) z = oF + d / 2;
+  }
+
+  return [x, position[1], z];
 }
 
 function buildPieceModules(config: DesignConfig, enabledPieces: Set<PieceId>, positions: ShelfPositions, rotations: PieceRotations): PieceModule[] {
@@ -797,15 +969,19 @@ function ResolvedPanelIndicators({ pieceModule }: { pieceModule: PieceModule }) 
 function DraggableModule({
   pieceModule,
   selected,
+  invalid,
   cameraView,
   config,
+  footprint,
   onSelect,
   onMove,
 }: {
   pieceModule: PieceModule;
   selected: boolean;
+  invalid: boolean;
   cameraView: CameraView;
   config: DesignConfig;
+  footprint: MeasuredFootprint;
   onSelect: (id: string) => void;
   onMove: (id: string, position: [number, number, number]) => void;
 }) {
@@ -840,9 +1016,11 @@ function DraggableModule({
 
     const plan = getPlanDimensions(pieceModule.dimensions, pieceModule.rotation);
 
-    clamped.x = Math.max(-config.width / 2 + plan.width / 2, Math.min(config.width / 2 - plan.width / 2, clamped.x));
+    const wallInset = WALL_THICKNESS / 2;
+    const bounds = getRoomWorldBounds(config, footprint);
+    clamped.x = Math.max(bounds.left + wallInset + plan.width / 2, Math.min(bounds.right - wallInset - plan.width / 2, clamped.x));
     clamped.y = Math.max(h / 2, Math.min(config.height - h / 2, clamped.y));
-    clamped.z = Math.max(-config.depth / 2 + plan.depth / 2, Math.min(config.depth / 2 - plan.depth / 2, clamped.z));
+    clamped.z = Math.max(bounds.back + wallInset + plan.depth / 2, Math.min(bounds.front - wallInset - plan.depth / 2, clamped.z));
 
     const gridMiss = offGridAmount([clamped.x, clamped.y, clamped.z], [base.x, base.y, base.z]);
     if (gridMiss <= 1) {
@@ -907,12 +1085,12 @@ function DraggableModule({
         <boxGeometry args={pieceModule.dimensions} />
         <meshBasicMaterial transparent opacity={0.01} depthWrite={false} />
       </mesh>
-      {(selected || hovered) && (
+      {(selected || invalid) && (
         <RoundedBox args={[w + 1.6, h + 1.6, d + 1.6]} radius={0.8} smoothness={4}>
-          <meshBasicMaterial color={selected ? "#8c9994" : "#c9d3cd"} transparent opacity={0.18} />
+          <meshBasicMaterial color={invalid ? "#b45643" : selected ? "#8c9994" : "#c9d3cd"} transparent opacity={invalid ? 0.24 : 0.18} />
         </RoundedBox>
       )}
-      <ModuleGeometry pieceModule={pieceModule} selected={selected || hovered} />
+      <ModuleGeometry pieceModule={pieceModule} selected={selected} />
       {selected && <ResolvedPanelIndicators pieceModule={pieceModule} />}
     </group>
   );
@@ -921,15 +1099,19 @@ function DraggableModule({
 function ConfigurableModules({
   modules,
   selectedPiece,
+  invalidModuleIds,
   cameraView,
   config,
+  footprint,
   onSelect,
   onMove,
 }: {
   modules: PieceModule[];
   selectedPiece: string | null;
+  invalidModuleIds: Set<string>;
   cameraView: CameraView;
   config: DesignConfig;
+  footprint: MeasuredFootprint;
   onSelect: (id: string) => void;
   onMove: (id: string, position: [number, number, number]) => void;
 }) {
@@ -940,8 +1122,10 @@ function ConfigurableModules({
           key={pieceModule.id}
           pieceModule={pieceModule}
           selected={selectedPiece === pieceModule.id}
+          invalid={invalidModuleIds.has(pieceModule.id)}
           cameraView={cameraView}
           config={config}
+          footprint={footprint}
           onSelect={onSelect}
           onMove={onMove}
         />
@@ -994,8 +1178,8 @@ function ClosetRoom({
   const doorOpeningWidth = Math.max(24, footprint.opening.width);
   const frontWallZ = ((leftJamb?.y ?? config.depth) + (rightJamb?.y ?? config.depth)) / 2 - config.depth / 2 + WALL_THICKNESS / 2;
   const roomWallExtension = 64;
-  const leftDoorJambX = (leftJamb?.x ?? config.frontStubDepth) - config.width / 2 - WALL_THICKNESS / 2;
-  const rightDoorJambX = (rightJamb?.x ?? config.width - config.frontStubDepth) - config.width / 2 + WALL_THICKNESS / 2;
+  const leftDoorJambX = (leftJamb?.x ?? (config.frontLeftStubDepth ?? config.frontStubDepth)) - config.width / 2 - WALL_THICKNESS / 2;
+  const rightDoorJambX = (rightJamb?.x ?? config.width - (config.frontRightStubDepth ?? config.frontStubDepth)) - config.width / 2 + WALL_THICKNESS / 2;
   const leftRoomWallX = -doorOpeningWidth / 2 - WALL_THICKNESS - roomWallExtension / 2;
   const rightRoomWallX = doorOpeningWidth / 2 + WALL_THICKNESS + roomWallExtension / 2;
   const measuredWalls = footprint.walls
@@ -1032,9 +1216,9 @@ function ClosetRoom({
     <group>
       {showWalls && measuredWalls.map((wall) => (
         wall.opacity <= 0 ? null : (
-          <mesh key={`${wall.from}-${wall.to}`} position={wall.midpoint} rotation={[0, wall.rotationY, 0]} receiveShadow>
+          <mesh key={`${wall.from}-${wall.to}`} position={wall.midpoint} rotation={[0, wall.rotationY, 0]} receiveShadow={wall.opacity >= 1}>
             <boxGeometry args={[wall.length + WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color={wall.color} opacity={wall.opacity} transparent={wall.opacity < 1} roughness={0.9} />
+            <meshStandardMaterial color={wall.color} opacity={wall.opacity} transparent={wall.opacity < 1} roughness={0.9} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
           </mesh>
         )
       ))}
@@ -1042,23 +1226,23 @@ function ClosetRoom({
       {/* doorway wall extensions — light room context without closing off the product view */}
       {showDoorwayContext && (
         <>
-          <mesh position={[leftRoomWallX, config.height / 2, frontWallZ]} receiveShadow>
+          <mesh position={[leftRoomWallX, config.height / 2, frontWallZ]} receiveShadow={doorwayContextOpacity >= 1}>
             <boxGeometry args={[roomWallExtension, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e7e1db" opacity={doorwayContextOpacity} transparent roughness={0.9} />
+            <meshStandardMaterial color="#e7e1db" opacity={doorwayContextOpacity} transparent roughness={0.9} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
           </mesh>
-          <mesh position={[rightRoomWallX, config.height / 2, frontWallZ]} receiveShadow>
+          <mesh position={[rightRoomWallX, config.height / 2, frontWallZ]} receiveShadow={doorwayContextOpacity >= 1}>
             <boxGeometry args={[roomWallExtension, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e7e1db" opacity={doorwayContextOpacity} transparent roughness={0.9} />
+            <meshStandardMaterial color="#e7e1db" opacity={doorwayContextOpacity} transparent roughness={0.9} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
           </mesh>
-          <mesh position={[leftDoorJambX, config.height / 2, frontWallZ]} receiveShadow>
+          <mesh position={[leftDoorJambX, config.height / 2, frontWallZ]} receiveShadow={doorwayContextOpacity >= 1}>
             <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e5ded7" opacity={doorwayContextOpacity} transparent roughness={0.9} />
+            <meshStandardMaterial color="#e5ded7" opacity={doorwayContextOpacity} transparent roughness={0.9} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
           </mesh>
-          <mesh position={[rightDoorJambX, config.height / 2, frontWallZ]} receiveShadow>
+          <mesh position={[rightDoorJambX, config.height / 2, frontWallZ]} receiveShadow={doorwayContextOpacity >= 1}>
             <boxGeometry args={[WALL_THICKNESS, config.height + WALL_THICKNESS, WALL_THICKNESS]} />
-            <meshStandardMaterial color="#e5ded7" opacity={doorwayContextOpacity} transparent roughness={0.9} />
+            <meshStandardMaterial color="#e5ded7" opacity={doorwayContextOpacity} transparent roughness={0.9} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
           </mesh>
-          <mesh position={[0, config.height + WALL_THICKNESS / 2, frontWallZ]} receiveShadow>
+          <mesh position={[0, config.height + WALL_THICKNESS / 2, frontWallZ]} receiveShadow={doorwayContextOpacity >= 1}>
             <boxGeometry args={[doorOpeningWidth + WALL_THICKNESS * 2, WALL_THICKNESS, WALL_THICKNESS]} />
             <meshStandardMaterial color="#f0ebe5" opacity={doorwayContextOpacity * 0.9} transparent roughness={0.9} />
           </mesh>
@@ -1072,11 +1256,11 @@ function ClosetRoom({
       {/* room floor context plus measured closet footprint */}
       <mesh position={[0, -0.32, config.depth / 4 + 8]} receiveShadow>
         <boxGeometry args={[config.width + (WALL_THICKNESS + flangeW) * 2, 0.35, config.depth + flangeW + WALL_THICKNESS * 2]} />
-        <meshStandardMaterial color="#cfc8be" roughness={0.88} />
+        <meshStandardMaterial color="#cfc8be" roughness={0.88} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.25, 0]} receiveShadow>
         <shapeGeometry args={[floorShape]} />
-        <meshStandardMaterial color="#d8d2c8" roughness={0.88} />
+        <meshStandardMaterial color="#d8d2c8" roughness={0.88} polygonOffset polygonOffsetFactor={2} polygonOffsetUnits={2} />
       </mesh>
 
       {/* ceiling */}
@@ -1539,12 +1723,14 @@ function CameraRig({
     if (cameraView === "front") {
       destination.set(0, config.height * 0.58, config.depth + 110);
     } else if (cameraView === "top") {
-      destination.set(0, config.height + 95, config.depth + 8);
-      target.set(0, config.shelfHeight, -2);
+      const span = Math.max(config.width, config.depth);
+      const topH = Math.max(config.height + 140, span * 2.25);
+      destination.set(0, topH, 0.01);
+      target.set(0, 0, 0);
     } else if (cameraView === "detail" || mode === "inspection") {
       destination.set(focusX + 42, focusY + 5, focusZ + 58);
     } else {
-      destination.set(config.width * 0.76, config.height * 0.52, config.depth + 68);
+      destination.set(config.width * 0.52 + 36, config.height * 0.52, config.depth + config.width * 0.28 + 40);
     }
 
     const zoomed = destination.clone().sub(lookTarget).multiplyScalar(zoom).add(lookTarget);
@@ -1571,7 +1757,9 @@ function FloorShadow({ cameraView }: { cameraView: CameraView }) {
   );
 }
 
-function Lights() {
+function Lights({ config }: { config: DesignConfig }) {
+  const shadowSpan = Math.max(config.width, config.depth) + 120;
+
   return (
     <>
       <hemisphereLight args={["#fff8f0", "#d8d0c4", 1.1]} />
@@ -1579,9 +1767,15 @@ function Lights() {
         position={[60, 130, 80]}
         intensity={0.9}
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-        shadow-bias={-0.0005}
+        shadow-mapSize-width={4096}
+        shadow-mapSize-height={4096}
+        shadow-bias={-0.0004}
+        shadow-camera-left={-shadowSpan / 2}
+        shadow-camera-right={shadowSpan / 2}
+        shadow-camera-top={shadowSpan / 2}
+        shadow-camera-bottom={-shadowSpan / 2}
+        shadow-camera-near={1}
+        shadow-camera-far={500}
       />
       <directionalLight position={[-40, 60, 50]} intensity={0.45} color="#fffaf6" />
     </>
@@ -1704,7 +1898,6 @@ export default function ClosetExperience3D() {
   const minZoom = cameraView === "top" ? 0.72 : cameraView === "front" ? 0.76 : cameraView === "detail" ? 0.42 : 0.52;
   const maxZoom = cameraView === "top" ? 1.38 : cameraView === "front" ? 1.08 : cameraView === "detail" ? 2.05 : 1.24;
   const effectiveZoom = Math.max(minZoom, Math.min(maxZoom, zoom));
-  const activePieces = useMemo(() => getActivePieces(config, enabledPieces), [config, enabledPieces]);
   const visibleGroups = useMemo(() => getVisiblePieceGroups(), []);
   const componentsSubtotal = useMemo(
     () => productBlocks.length > 0 ? productBlocks.reduce((sum, block) => sum + block.price, 0) : getComponentsSubtotal(config, enabledPieces),
@@ -1725,13 +1918,25 @@ export default function ClosetExperience3D() {
     () => getFeaturePlacementNotes(config, modules, roomFeatures),
     [config, modules, roomFeatures]
   );
+  const moduleOverlapNotes = useMemo(() => getModuleOverlapNotes(modules), [modules]);
   const selectedFeatureNotes = useMemo(
     () => selectedModule ? featurePlacementNotes.filter((note) => note.module.id === selectedModule.id) : [],
     [featurePlacementNotes, selectedModule]
   );
+  const selectedModuleOverlapNotes = useMemo(
+    () => selectedModule ? moduleOverlapNotes.filter((note) => note.modules.some((module) => module.id === selectedModule.id)) : [],
+    [moduleOverlapNotes, selectedModule]
+  );
   const blockedFeatureIds = useMemo(
     () => new Set(featurePlacementNotes.map((note) => note.feature.id)),
     [featurePlacementNotes]
+  );
+  const invalidModuleIds = useMemo(
+    () => new Set([
+      ...featurePlacementNotes.map((note) => note.module.id),
+      ...moduleOverlapNotes.flatMap((note) => note.modules.map((module) => module.id)),
+    ]),
+    [featurePlacementNotes, moduleOverlapNotes]
   );
 
   useEffect(() => {
@@ -1762,15 +1967,18 @@ export default function ClosetExperience3D() {
   }
 
   function handleMovePiece(id: string, position: [number, number, number]) {
-    if (productBlocks.some((block) => block.id === id)) {
-      setBlockPositions({
-        ...blockPositions,
-        [id]: position,
-      });
-      return;
-    }
+    const pieceModule = modules.find((m) => m.id === id);
+    if (!pieceModule) return;
 
-    setShelfPositions({ ...shelfPositions, [id]: position });
+    const otherModules = modules.filter((m) => m.id !== id);
+    const snapped = snapModulePosition(position, pieceModule.dimensions, pieceModule.rotation, otherModules, config, closetFootprint);
+    const clamped = clampModulePosition(config, pieceModule.dimensions, pieceModule.rotation, snapped, closetFootprint);
+
+    if (pieceModule.parts) {
+      setBlockPositions({ ...blockPositions, [id]: clamped });
+    } else {
+      setShelfPositions({ ...shelfPositions, [id]: clamped });
+    }
   }
 
   function handleRotatePiece(id: string) {
@@ -1778,12 +1986,12 @@ export default function ClosetExperience3D() {
     if (!pieceModule) return;
 
     const nextRotation = getNextRotation(pieceModule.rotation);
-    if (productBlocks.some((block) => block.id === id)) {
+    if (pieceModule.parts) {
       setBlockRotations({ ...blockRotations, [id]: nextRotation });
-      setBlockPositions({ ...blockPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position) });
+      setBlockPositions({ ...blockPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position, closetFootprint) });
     } else {
       setPieceRotations({ ...pieceRotations, [id]: nextRotation });
-      setShelfPositions({ ...shelfPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position) });
+      setShelfPositions({ ...shelfPositions, [id]: clampModulePosition(config, pieceModule.dimensions, nextRotation, pieceModule.position, closetFootprint) });
     }
     setSelectedPiece(id);
     setMode("inspection");
@@ -1820,10 +2028,10 @@ export default function ClosetExperience3D() {
 
       <div className="grid overflow-x-hidden xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="relative h-[58vh] min-h-[380px] overflow-hidden bg-[#ebe5dc] md:h-[62vh] md:min-h-[500px] xl:h-[calc(100vh-210px)] xl:min-h-[560px]">
-          <Canvas shadows={{ type: THREE.PCFShadowMap }} camera={{ position: [112, 82, 124], fov: 38 }} dpr={[1, 1.7]} style={{ touchAction: "pan-y" }}>
+          <Canvas shadows={{ type: THREE.PCFShadowMap }} camera={{ position: [112, 82, 124], fov: 38 }} dpr={[1, 2]} style={{ touchAction: "pan-y" }}>
             <color attach="background" args={["#ebe5dc"]} />
             <fog attach="fog" args={["#ebe5dc", 160, 300]} />
-            <Lights />
+            <Lights config={config} />
             <FloorShadow cameraView={cameraView} />
             <CameraRig mode={mode} cameraView={cameraView} focusPosition={selectedModule?.position ?? null} config={config} zoom={effectiveZoom} />
             <ClosetRoom mode={mode} cameraView={cameraView} wallVisibility={wallVisibility} config={config} footprint={closetFootprint} />
@@ -1831,8 +2039,10 @@ export default function ClosetExperience3D() {
             <ConfigurableModules
               modules={modules}
               selectedPiece={effectiveSelectedPiece}
+              invalidModuleIds={invalidModuleIds}
               cameraView={cameraView}
               config={config}
+              footprint={closetFootprint}
               onSelect={(id) => {
                 setSelectedPiece(id);
                 setMode("inspection");
@@ -1881,6 +2091,18 @@ export default function ClosetExperience3D() {
                 Rotate Selected
               </button>
             )}
+            {productBlocks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBlockPositions({});
+                  setBlockRotations({});
+                }}
+                className="rounded-md border border-[#cbd6ce] bg-white px-3 py-2 text-sm font-semibold text-[#33413c] transition hover:bg-[#eef3ee]"
+              >
+                Reflow Blocks
+              </button>
+            )}
             <div className="flex flex-wrap gap-2">
               {(["full", "smart", "open"] as WallVisibility[]).map((visibility) => (
                 <ChoiceButton key={visibility} active={wallVisibility === visibility} onClick={() => setWallVisibility(visibility)}>
@@ -1927,30 +2149,8 @@ export default function ClosetExperience3D() {
             )}
           </div>
 
-          <div className="mb-5 rounded-md border border-[#d8dfd8] bg-white p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Estimated installed total</div>
-                <div className="mt-1 text-2xl font-semibold tracking-tight text-[#1f2824]">{formatCurrency(systemPrice)}</div>
-              </div>
-              <div className="rounded-md bg-[#f0f4f0] px-2 py-1 text-[10px] font-semibold text-[#53635d]">
-                {productBlocks.length > 0 ? `${productBlocks.length} blocks` : `${activePieces.length} active pieces`}
-              </div>
-            </div>
-            <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-              <div>
-                <dt className="text-[#6f7d76]">Components</dt>
-                <dd className="font-semibold text-[#25302c]">{formatCurrency(componentsSubtotal)}</dd>
-              </div>
-              <div>
-                <dt className="text-[#6f7d76]">Materials</dt>
-                <dd className="font-semibold text-[#25302c]">{formatCurrency(allowances.materialAllowance)}</dd>
-              </div>
-              <div>
-                <dt className="text-[#6f7d76]">Install</dt>
-                <dd className="font-semibold text-[#25302c]">{formatCurrency(allowances.installAllowance)}</dd>
-              </div>
-            </dl>
+          <div className="mb-5">
+            <DealEconomicsPanel materialCost={materialSubtotal} />
           </div>
 
           <div className="mb-1 flex items-center justify-between">
@@ -1994,10 +2194,6 @@ export default function ClosetExperience3D() {
             ))}
           </div>
 
-          <div className="mt-3 flex items-center justify-between rounded-md border border-[#d8dfd8] bg-[#f0f4f0] px-3 py-2.5">
-            <span className="text-xs font-semibold text-[#53635d]">Components subtotal</span>
-            <span className="text-sm font-bold text-[#1f2824]">{formatCurrency(componentsSubtotal)}</span>
-          </div>
 
           {materialLines.length > 0 && (
             <div className="mt-5 rounded-md border border-[#d8dfd8] bg-[#fbfcfb] p-4">
@@ -2053,12 +2249,23 @@ export default function ClosetExperience3D() {
               </div>
             </dl>
             <div className="mt-3 rounded-md bg-[#f4f6f4] px-3 py-2 text-xs leading-5 text-[#53635d]">
-              {featurePlacementNotes.length > 0
+              {moduleOverlapNotes.length > 0
+                ? `${moduleOverlapNotes.length} product overlap${moduleOverlapNotes.length === 1 ? "" : "s"} must be resolved before proposal.`
+                : featurePlacementNotes.length > 0
                 ? `${featurePlacementNotes.length} blocked room feature${featurePlacementNotes.length === 1 ? "" : "s"} must be cleared before proposal.`
                 : storageStats.warnings > 0
                 ? `${storageStats.warnings} placement note${storageStats.warnings === 1 ? "" : "s"} need review before proposal.`
                 : "No placement conflicts detected in this mock validation pass."}
             </div>
+            {moduleOverlapNotes.length > 0 && (
+              <div className="mt-2 space-y-1.5">
+                {moduleOverlapNotes.slice(0, 3).map((note) => (
+                  <div key={note.id} className="rounded-md border border-[#dec8c0] bg-[#fbf2ef] px-2.5 py-2 text-[11px] leading-4 text-[#7e4e40]">
+                    {note.message}
+                  </div>
+                ))}
+              </div>
+            )}
             {featurePlacementNotes.length > 0 && (
               <div className="mt-2 space-y-1.5">
                 {featurePlacementNotes.slice(0, 3).map((note) => (
@@ -2144,6 +2351,11 @@ export default function ClosetExperience3D() {
                   {active && selectedFeatureNotes.length > 0 && (
                     <div className="mt-2 rounded-md border border-[#dec8c0] bg-[#fbf2ef] px-2.5 py-2 text-[11px] leading-4 text-[#7e4e40]">
                       {selectedFeatureNotes[0].message}
+                    </div>
+                  )}
+                  {active && selectedModuleOverlapNotes.length > 0 && (
+                    <div className="mt-2 rounded-md border border-[#dec8c0] bg-[#fbf2ef] px-2.5 py-2 text-[11px] leading-4 text-[#7e4e40]">
+                      {selectedModuleOverlapNotes[0].message}
                     </div>
                   )}
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">

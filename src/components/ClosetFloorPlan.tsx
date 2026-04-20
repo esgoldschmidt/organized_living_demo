@@ -155,7 +155,10 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
   const hfs = hasFrontStubs(config.shape);
   const W = config.width * I;
   const D = config.depth * I;
-  const fsd = config.frontStubDepth * I;  // front stub SVG width
+  const leftFsdIn = config.frontLeftStubDepth ?? config.frontStubDepth;
+  const rightFsdIn = config.frontRightStubDepth ?? config.frontStubDepth;
+  const leftFsd = leftFsdIn * I;
+  const rightFsd = rightFsdIn * I;
   const ox = PAD_X;
   const oy = PAD_Y;
   const ix = ox + WALL;   // interior left
@@ -228,9 +231,11 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
     } else if (drag.id === "depth") {
       onChange({ depth: clamp(snapTo(drag.startDepth - (y - drag.startY) / I, 6), 20, 180) });
     } else if (drag.id === "frontLeftStub") {
-      onChange({ frontStubDepth: clamp(snapTo((x - ix) / I, 6), 12, config.width / 2 - 24) });
+      const maxLeft = Math.max(12, config.width - rightFsdIn - 24);
+      onChange({ frontLeftStubDepth: clamp(snapTo((x - ix) / I, 6), 12, maxLeft) });
     } else if (drag.id === "frontRightStub") {
-      onChange({ frontStubDepth: clamp(snapTo((rx - x) / I, 6), 12, config.width / 2 - 24) });
+      const maxRight = Math.max(12, config.width - leftFsdIn - 24);
+      onChange({ frontRightStubDepth: clamp(snapTo((rx - x) / I, 6), 12, maxRight) });
     }
   }
 
@@ -311,8 +316,8 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
               fill="#d4cec6" opacity={0.45} />
       )}
       {hfs && (
-        <rect x={ix + fsd} y={iy + D + WALL}
-              width={W - 2 * fsd} height={40}
+        <rect x={ix + leftFsd} y={iy + D + WALL}
+              width={W - leftFsd - rightFsd} height={40}
               fill="#d4cec6" opacity={0.45} />
       )}
 
@@ -373,18 +378,18 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
       {hr && <rect x={rx} y={oy} width={WALL} height={WALL + D} fill="#2c2824" />}
 
       {/* ── Front stubs (walk-in) ── */}
-      {hfs && <rect x={ox} y={iy + D} width={WALL + fsd} height={WALL} fill="#2c2824" />}
-      {hfs && <rect x={rx - fsd} y={iy + D} width={fsd + WALL} height={WALL} fill="#2c2824" />}
+      {hfs && <rect x={ox} y={iy + D} width={WALL + leftFsd} height={WALL} fill="#2c2824" />}
+      {hfs && <rect x={rx - rightFsd} y={iy + D} width={rightFsd + WALL} height={WALL} fill="#2c2824" />}
 
       {/* ── Wall labels ── */}
       <text x={ix + W / 2} y={oy + WALL / 2} textAnchor="middle" dominantBaseline="middle"
             fontSize={8} fill="#c4beb8" fontFamily="system-ui,sans-serif" letterSpacing="0.1em">BACK WALL</text>
       {hfs && (
         <>
-          <text x={ox + (WALL + fsd) / 2} y={iy + D + WALL / 2} textAnchor="middle" dominantBaseline="middle"
-                fontSize={7} fill="#c4beb8" fontFamily="system-ui,sans-serif">{config.frontStubDepth}&quot;</text>
-          <text x={rx - fsd / 2} y={iy + D + WALL / 2} textAnchor="middle" dominantBaseline="middle"
-                fontSize={7} fill="#c4beb8" fontFamily="system-ui,sans-serif">{config.frontStubDepth}&quot;</text>
+          <text x={ox + (WALL + leftFsd) / 2} y={iy + D + WALL / 2} textAnchor="middle" dominantBaseline="middle"
+                fontSize={7} fill="#c4beb8" fontFamily="system-ui,sans-serif">{leftFsdIn}&quot;</text>
+          <text x={rx - rightFsd / 2} y={iy + D + WALL / 2} textAnchor="middle" dominantBaseline="middle"
+                fontSize={7} fill="#c4beb8" fontFamily="system-ui,sans-serif">{rightFsdIn}&quot;</text>
         </>
       )}
 
@@ -392,9 +397,9 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
       <HDim x1={ix} x2={rx} y={widthDimY} label={`${config.width}" wide`} />
       <VDim y1={iy} y2={iy + D} x={dimX} label={`${config.depth}"`} active={depthActive} />
       {hfs && (
-        <HDim x1={ix + fsd} x2={rx - fsd}
+        <HDim x1={ix + leftFsd} x2={rx - rightFsd}
               y={dimY}
-              label={`${config.width - 2 * config.frontStubDepth}" opening`} />
+              label={`${config.width - leftFsdIn - rightFsdIn}" opening`} />
       )}
 
       {/* ── Drag handles ── */}
@@ -427,8 +432,8 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
       })}
       <DragHandle cx={rx} cy={iy + D / 2} id="width" cursor="ew-resize" {...handleProps("width")} />
       <DragHandle cx={depthHandleCx} cy={depthHandleCy} id="depth" cursor="ns-resize" {...handleProps("depth")} />
-      {hfs && <DragHandle cx={ix + fsd} cy={iy + D + WALL / 2} id="frontLeftStub" cursor="ew-resize" quiet {...handleProps("frontLeftStub")} />}
-      {hfs && <DragHandle cx={rx - fsd} cy={iy + D + WALL / 2} id="frontRightStub" cursor="ew-resize" quiet {...handleProps("frontRightStub")} />}
+      {hfs && <DragHandle cx={ix + leftFsd} cy={iy + D + WALL / 2} id="frontLeftStub" cursor="ew-resize" quiet {...handleProps("frontLeftStub")} />}
+      {hfs && <DragHandle cx={rx - rightFsd} cy={iy + D + WALL / 2} id="frontRightStub" cursor="ew-resize" quiet {...handleProps("frontRightStub")} />}
 
       {/* ── Handle tooltip labels ── */}
       {(drag?.id === "width" || hover === "width") && (
@@ -436,11 +441,11 @@ export default function ClosetFloorPlan({ config, footprint, roomFeatures, onCha
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">width</text>
       )}
       {(drag?.id === "frontLeftStub" || hover === "frontLeftStub") && (
-        <text x={ix + fsd} y={iy + D + WALL + 16} textAnchor="middle"
+        <text x={ix + leftFsd} y={iy + D + WALL + 16} textAnchor="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">entry wall</text>
       )}
       {(drag?.id === "frontRightStub" || hover === "frontRightStub") && (
-        <text x={rx - fsd} y={iy + D + WALL + 16} textAnchor="middle"
+        <text x={rx - rightFsd} y={iy + D + WALL + 16} textAnchor="middle"
               fontSize={9} fill="#25302c" fontFamily="system-ui,sans-serif" fontWeight="600">entry wall</text>
       )}
       {(pointDrag || featureDrag) && (

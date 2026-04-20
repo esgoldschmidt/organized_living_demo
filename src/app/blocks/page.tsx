@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Toolbar from "@/components/Toolbar";
 import { buildMaterialList, useDesignStore } from "@/store/designStore";
@@ -115,12 +116,28 @@ export default function BlocksPage() {
     addProductBlock,
     updateProductBlock,
     removeProductBlock,
+    createAssembly,
+    dissolveAssembly,
     roomFeatures,
     updateRoomFeature,
   } = useDesignStore();
 
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+
   const selectedBlock = productBlocks.find((block) => block.id === selectedBlockId) ?? productBlocks[0] ?? null;
-  const materialLines = buildMaterialList(productBlocks, closetConfig);
+
+  const groups = Array.from(
+    productBlocks.reduce((map, block) => {
+      if (block.groupId) {
+        map.set(block.groupId, [...(map.get(block.groupId) ?? []), block]);
+      }
+      return map;
+    }, new Map<string, typeof productBlocks>())
+  );
+  const looseBlocks = productBlocks.filter((block) => !block.groupId);
+  const effectiveChecked = new Set([...checkedIds].filter((id) => looseBlocks.some((b) => b.id === id)));
+  const materialScopeBlocks = selectedBlock ? [selectedBlock] : [];
+  const materialLines = buildMaterialList(materialScopeBlocks, closetConfig);
   const materialSubtotal = materialLines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
   const materialsByCategory = {
     manufactured: materialLines.filter((line) => line.category === "manufactured"),
@@ -236,13 +253,13 @@ export default function BlocksPage() {
               <div className="mt-4 rounded-lg border border-[#d8dfd8] bg-[#fbfcfb] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-[#25302c]">Mock materials takeoff</h3>
+                    <h3 className="text-sm font-semibold text-[#25302c]">Selected block materials</h3>
                     <p className="mt-1 text-xs leading-5 text-[#6f7d76]">
-                      A proposal would usually include both manufactured parts and install hardware.
+                      Mock cost basis for this block. The block estimate is the sell price; this list explains the parts and install hardware behind it.
                     </p>
                   </div>
                   <div className="rounded-md bg-[#f0f4f0] px-3 py-2 text-right">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Materials</div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6f8c76]">Cost basis</div>
                     <div className="text-lg font-semibold text-[#1f2824]">{formatCurrency(materialSubtotal)}</div>
                   </div>
                 </div>
@@ -276,24 +293,93 @@ export default function BlocksPage() {
 
         <aside className="rounded-xl border border-[#cdd8d0] bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-[#1f2824]">Block library</h2>
-          <div className="mt-3 space-y-2">
-            {productBlocks.map((block) => (
-              <button
-                type="button"
-                key={block.id}
-                onClick={() => setSelectedBlockId(block.id)}
-                className={`w-full rounded-md border p-3 text-left transition ${
-                  selectedBlock?.id === block.id ? "border-[#25302c] bg-[#f6f8f5]" : "border-[#d8dfd8] bg-white hover:bg-[#f6f8f5]"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-[#25302c]">{block.name}</span>
-                  <span className="rounded bg-[#eef3ee] px-1.5 py-0.5 text-[10px] font-semibold text-[#53635d]">{formatLine(block.productLine)}</span>
-                </div>
-                <div className="mt-1 text-xs text-[#6f7d76]">{block.width}&quot; x {block.height}&quot; x {block.depth}&quot;</div>
-              </button>
-            ))}
-          </div>
+
+          {/* Assemblies */}
+          {groups.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {groups.map(([groupId, blocks], index) => {
+                const runWidth = blocks.reduce((sum, b) => sum + b.width, 0);
+                return (
+                  <div key={groupId} className="rounded-md border border-[#cbd6ce] bg-[#f6f8f5] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-[#25302c]">
+                        Assembly {index + 1} · {blocks.length} blocks · {runWidth}&quot;
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => dissolveAssembly(groupId)}
+                        className="text-[10px] font-semibold text-[#a06858] hover:text-[#7e3c2c]"
+                      >
+                        Dissolve
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {blocks.map((b) => (
+                        <span key={b.id} className="rounded border border-[#d8dfd8] bg-white px-1.5 py-0.5 text-[10px] text-[#53635d]">
+                          {b.name} {b.width}&quot;
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Loose blocks with checkboxes */}
+          {looseBlocks.length > 0 && (
+            <>
+              <div className="mt-3 space-y-1.5">
+                {looseBlocks.map((block) => (
+                  <div
+                    key={block.id}
+                    className={`flex items-center gap-2 rounded-md border p-2.5 transition ${
+                      selectedBlock?.id === block.id ? "border-[#25302c] bg-[#f6f8f5]" : "border-[#d8dfd8] bg-white"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={effectiveChecked.has(block.id)}
+                      onChange={(e) => {
+                        const next = new Set(checkedIds);
+                        if (e.target.checked) next.add(block.id);
+                        else next.delete(block.id);
+                        setCheckedIds(next);
+                      }}
+                      className="h-3.5 w-3.5 accent-[#25302c]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBlockId(block.id)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-[#25302c]">{block.name}</span>
+                        <span className="rounded bg-[#eef3ee] px-1.5 py-0.5 text-[10px] font-semibold text-[#53635d]">{formatLine(block.productLine)}</span>
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-[#6f7d76]">{block.width}&quot; × {block.height}&quot; × {block.depth}&quot;</div>
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {effectiveChecked.size >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    createAssembly(Array.from(effectiveChecked));
+                    setCheckedIds(new Set());
+                  }}
+                  className="mt-2 w-full rounded-md border border-[#25302c] bg-[#25302c] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1a2320]"
+                >
+                  Link {effectiveChecked.size} selected edge-to-edge
+                </button>
+              )}
+            </>
+          )}
+
+          {productBlocks.length === 0 && (
+            <p className="mt-3 text-xs text-[#6f7d76]">Add blocks from the left panel.</p>
+          )}
 
           {selectedBlock && (
             <div className="mt-5 space-y-4 border-t border-[#e3e9e3] pt-5">

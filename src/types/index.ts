@@ -37,6 +37,8 @@ export interface SnapshotClosetConfig {
   rightReturn: number;
   rightOffset: number;
   frontStubDepth: number;
+  frontLeftStubDepth?: number;
+  frontRightStubDepth?: number;
   shape: SnapshotClosetShape;
 }
 
@@ -119,6 +121,7 @@ export interface ProductBlockPart {
 
 export interface ProductBlock {
   id: string;
+  groupId?: string;
   name: string;
   kind: ProductBlockKind;
   productLine: ProductLine;
@@ -193,6 +196,8 @@ export const SnapshotClosetConfigSchema = z.object({
   rightReturn: z.number(),
   rightOffset: z.number(),
   frontStubDepth: z.number(),
+  frontLeftStubDepth: z.number().optional(),
+  frontRightStubDepth: z.number().optional(),
   shape: z.enum(["straight", "left", "right", "u", "walk-in"]),
 });
 
@@ -250,6 +255,7 @@ export const ProductBlockPartSchema = z.object({
 
 export const ProductBlockSchema = z.object({
   id: z.string(),
+  groupId: z.string().optional(),
   name: z.string(),
   kind: z.enum(["shelf-rod", "double-hang", "drawer-stack", "shoe-tower", "open-shelves"]),
   productLine: z.enum(["freedomRail", "select"]),
